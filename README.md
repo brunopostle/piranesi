@@ -73,6 +73,10 @@ Change output dimensions:
 piranesi.py --width 2000 --height 2000 input.png output.png
 ```
 
+![Input image](main-street.webp)
+
+![Output image](main-street-piranesi.webp)
+
 ## ALGORITHM
 
 The transformation uses a non-linear quadrilateral mapping that:
