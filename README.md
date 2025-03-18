@@ -1,4 +1,4 @@
-# Piranesi's Perspective Trick
+# PIRANESI'S PERSPECTIVE TRICK
 
 ## NAME
 
