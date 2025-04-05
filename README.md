@@ -107,4 +107,7 @@ GNU General Public License version 3 or later.
 ## SEE ALSO
 
 For more information about Piranesi's perspective technique:
-https://medium.com/@brunopostle/piranesis-perspective-trick-6bcd7a754da9
+
+https://github.com/brunopostle/piranesi/blob/main/doc/README.md
+
+Original link: https://medium.com/@brunopostle/piranesis-perspective-trick-6bcd7a754da9

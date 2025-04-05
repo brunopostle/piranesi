@@ -1,0 +1,31 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: piranesi
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Bruno
+    family-names: Postle
+    email: bruno@postle.net
+    orcid: 'https://orcid.org/0000-0001-9762-276X'
+repository-code: 'https://github.com/brunopostle/piranesi'
+url: 'https://github.com/brunopostle/piranesi'
+abstract: >-
+  piranesi.py performs Piranesi's perspective transformation
+  on images by mapping the image to a quadrilateral defined
+  by four points. This transformation differs from
+  conventional affine perspective transforms, following
+  techniques used by the 18th-century artist Giovanni
+  Battista Piranesi to create dramatic visual effects.
+keywords:
+  - photography
+  - perspective
+  - art
+  - veduta
+license: GPL-3.0
+commit: '2025-04-05'
+date-released: '2025-04-05'
