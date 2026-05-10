@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import re
-import sys
 import math
 import argparse
 from PIL import Image, ImageChops, ImageDraw
@@ -27,7 +26,6 @@ from PIL import Image, ImageChops, ImageDraw
 
 
 def main():
-    # Default values
     width = 1600
     height = 1600
     x1, y1 = 80, 990  # bottom-left
@@ -35,7 +33,6 @@ def main():
     x3, y3 = 1560, 250  # top-right
     x4, y4 = 40, 510  # top-left
 
-    # Parse command line options
     parser = argparse.ArgumentParser(description="Perspective transformation")
     parser.add_argument("--width", type=int, default=width, help="Output width")
     parser.add_argument("--height", type=int, default=height, help="Output height")
@@ -51,7 +48,6 @@ def main():
     parser.add_argument("output", help="Output image filename")
     args = parser.parse_args()
 
-    # Define the four corners of the distorted quadrilateral
     a = [args.x1, args.y1]
     b = [args.x2, args.y2]
     c = [args.x3, args.y3]
@@ -59,121 +55,81 @@ def main():
 
     quad_points = [a, b, c, d]
 
-    # Calculate line equations for each side of the quadrilateral
-    line_ab = points_2line(a, b)  # Top edge
+    line_ab = points_2line(a, b)  # Bottom edge
     line_bc = points_2line(b, c)  # Right edge
-    line_cd = points_2line(c, d)  # Bottom edge
+    line_cd = points_2line(c, d)  # Top edge
     line_da = points_2line(d, a)  # Left edge
 
-    # Find vanishing points by calculating line intersections
-    point_cd = line_intersection(line_bc, line_da)  # Right-left intersection
-    point_da = line_intersection(line_ab, line_cd)  # Top-bottom intersection
+    point_cd = line_intersection(line_bc, line_da)
+    point_da = line_intersection(line_ab, line_cd)
 
-    # Calculate scale factors for each edge using the ratio of distances
-    # These values are used in the transformation to maintain perspective
     k_ab = distance_2d(point_da, b) / distance_2d(point_da, a)
     k_bc = distance_2d(point_cd, b) / distance_2d(point_cd, c)
     k_cd = distance_2d(point_da, c) / distance_2d(point_da, d)
     k_da = distance_2d(point_cd, a) / distance_2d(point_cd, d)
 
-    # Create a function to calculate forward mapping using closures for context
     def _forward(x, y):
-        # Calculate relative positions along each edge using scale factors
-        x_ab = ((k_ab ** x) - 1) / (k_ab - 1)  # Top edge position
-        x_cd = ((k_cd ** x) - 1) / (k_cd - 1)  # Bottom edge position
-        y_bc = ((k_bc ** y) - 1) / (k_bc - 1)  # Right edge position
-        y_da = ((k_da ** y) - 1) / (k_da - 1)  # Left edge position
+        x_ab = ((k_ab ** x) - 1) / (k_ab - 1)
+        x_cd = ((k_cd ** x) - 1) / (k_cd - 1)
+        y_bc = ((k_bc ** y) - 1) / (k_bc - 1)
+        y_da = ((k_da ** y) - 1) / (k_da - 1)
 
-        # Calculate edge vectors
-        vec_ab = subtract_2d(b, a)  # Top edge vector
-        vec_cd = subtract_2d(c, d)  # Bottom edge vector
-        vec_bc = subtract_2d(b, c)  # Right edge vector
-        vec_da = subtract_2d(a, d)  # Left edge vector
+        point_x_ab = add_2d(a, scale_2d(subtract_2d(b, a), x_ab))
+        point_x_cd = add_2d(d, scale_2d(subtract_2d(c, d), x_cd))
+        point_y_bc = add_2d(c, scale_2d(subtract_2d(b, c), y_bc))
+        point_y_da = add_2d(d, scale_2d(subtract_2d(a, d), y_da))
 
-        # Calculate points along each edge based on the relative positions
-        point_x_ab = add_2d(a, scale_2d(vec_ab, x_ab))  # Point on top edge
-        point_x_cd = add_2d(d, scale_2d(vec_cd, x_cd))  # Point on bottom edge
-        point_y_bc = add_2d(c, scale_2d(vec_bc, y_bc))  # Point on right edge
-        point_y_da = add_2d(d, scale_2d(vec_da, y_da))  # Point on left edge
-
-        # Create lines connecting the points
-        line_x = points_2line(point_x_ab, point_x_cd)  # Vertical line at x position
-        line_y = points_2line(point_y_bc, point_y_da)  # Horizontal line at y position
-
-        # Find the intersection of the two lines - this is our transformed point
-        coor = line_intersection(line_x, line_y)
-
+        coor = line_intersection(
+            points_2line(point_x_ab, point_x_cd),
+            points_2line(point_y_bc, point_y_da),
+        )
         return coor[0], coor[1]
 
-    # Create a function to calculate reverse mapping using closures
     def _reverse(x_r, y_r):
-        # Convert from pixel coordinates to normalized coordinates (0-1)
         x_r_norm = x_r / args.width
         y_r_norm = y_r / args.height
 
-        x, y = 0.5, 0.5  # Initial guess for source coordinates
-        step = 0.001  # Step size for numerical approximation
-
+        x, y = 0.5, 0.5
+        step = 0.001
         last_x, last_y = x, y
 
-        # Run up to 10 iterations to refine the approximation
         for _ in range(11):
-            # Get destination coordinates using current guess
             x_r0, y_r0 = _forward(x, y)
-
-            # Convert to normalized coordinates for comparison
             x_r0_norm = x_r0 / args.width
             y_r0_norm = y_r0 / args.height
 
-            # Calculate approximate partial derivatives
-            x_r1, y_r1 = _forward(x + step, y)
-            x_r2, y_r2 = _forward(x, y + step)
-
-            # Convert to normalized coordinates
+            x_r1, _ = _forward(x + step, y)
+            _, y_r2 = _forward(x, y + step)
             x_r1_norm = x_r1 / args.width
-            y_r1_norm = y_r1 / args.height
-            x_r2_norm = x_r2 / args.width
             y_r2_norm = y_r2 / args.height
 
-            # Avoid division by zero
+            # avoid division by zero
             if abs(x_r1_norm - x_r0_norm) < 1e-10 or abs(y_r2_norm - y_r0_norm) < 1e-10:
                 return x, y
 
-            # Calculate step multipliers based on difference from target
             x_mult = (x_r_norm - x_r0_norm) / (x_r1_norm - x_r0_norm)
             y_mult = (y_r_norm - y_r0_norm) / (y_r2_norm - y_r0_norm)
 
-            # Update guess with scaled step
-            x = x + (x_mult * step / 2)
-            y = y + (y_mult * step / 2)
+            x = max(0, min(1, x + x_mult * step / 2))
+            y = max(0, min(1, y + y_mult * step / 2))
 
-            # Clamp values to valid range (0-1)
-            x = max(0, min(1, x))
-            y = max(0, min(1, y))
-
-            # Stop if convergence is reached
-            if (abs(x - last_x) < 0.0000001) and (abs(y - last_y) < 0.0000001):
+            if abs(x - last_x) < 0.0000001 and abs(y - last_y) < 0.0000001:
                 break
 
-            # Save current values for next iteration
             last_x, last_y = x, y
 
         return x, y
 
-    # Read input image
     input_image = Image.open(args.input)
     size_x, size_y = input_image.size
 
-    # Convert to RGBA if not already
     if input_image.mode != "RGBA":
         input_image = input_image.convert("RGBA")
 
-    # Generate and write output image
     output_image = transform_image(
         args.width, args.height, size_x, size_y, input_image, _reverse, quad_points
     )
 
-    # convert to RBG if necessary
     no_alpha_pattern = re.compile(
         r".*\.(jpe?g|bmp|pcx|p[bgp]m|eps|pdf|dcx|jfif)$", re.IGNORECASE
     )
@@ -181,9 +137,6 @@ def main():
         output_image = output_image.convert("RGB")
 
     output_image.save(args.output)
-
-
-# Image I/O Functions (using PIL)
 
 
 def transform_image(width, height, size_x, size_y, input_image, reverse_func, quad_points):
@@ -232,53 +185,35 @@ def transform_image(width, height, size_x, size_y, input_image, reverse_func, qu
     return Image.merge("RGBA", (r, g, b, ImageChops.multiply(a, mask)))
 
 
-# Geometric utility functions
-
-# Create a line equation (y = ax + b) from two points
 def points_2line(coor_0, coor_1):
-    # Calculate direction vector
     vector = subtract_2d(coor_1, coor_0)
-
-    # Avoid division by zero by setting a very small value
     if not vector[0]:
-        vector[0] = 0.00000000001
-
-    # Calculate slope (a) and y-intercept (b)
+        vector[0] = 0.00000000001  # avoid division by zero
     a = vector[1] / vector[0]
     b = coor_0[1] - (coor_0[0] * a)
-
     return {"a": a, "b": b}
 
 
-# Find intersection of two lines given by their equations
 def line_intersection(line_0, line_1):
-    # Handle parallel lines (return center point as fallback)
     if line_0["a"] == line_1["a"]:
-        return [0.5, 0.5]
-
-    # Calculate intersection point
+        return [0.5, 0.5]  # parallel lines: return centre as fallback
     x = (line_1["b"] - line_0["b"]) / (line_0["a"] - line_1["a"])
     y = (line_0["a"] * x) + line_0["b"]
-
     return [x, y]
 
 
-# Subtract two 2D vectors
 def subtract_2d(a, b):
     return [a[0] - b[0], a[1] - b[1]]
 
 
-# Add two 2D vectors
 def add_2d(a, b):
     return [a[0] + b[0], a[1] + b[1]]
 
 
-# Calculate Euclidean distance between two 2D points
 def distance_2d(a, b):
     return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2)
 
 
-# Scale a 2D vector by a factor
 def scale_2d(vector, factor):
     return [vector[0] * factor, vector[1] * factor]
 
