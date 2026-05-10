@@ -3,7 +3,7 @@ import re
 import sys
 import math
 import argparse
-from PIL import Image
+from PIL import Image, ImageChops, ImageDraw
 
 # This script performs Piranesi's perspective transformation of images using
 # quadrilateral mapping. This mapping is not the same as conventional affine
@@ -35,9 +35,6 @@ def main():
     x3, y3 = 1560, 250  # top-right
     x4, y4 = 40, 510  # top-left
 
-    # Store quadrilateral points globally for point_in_quad checking
-    global quad_points
-
     # Parse command line options
     parser = argparse.ArgumentParser(description="Perspective transformation")
     parser.add_argument("--width", type=int, default=width, help="Output width")
@@ -60,7 +57,6 @@ def main():
     c = [args.x3, args.y3]
     d = [args.x4, args.y4]
 
-    # Store quadrilateral points for point_in_quad check
     quad_points = [a, b, c, d]
 
     # Calculate line equations for each side of the quadrilateral
@@ -174,7 +170,7 @@ def main():
 
     # Generate and write output image
     output_image = transform_image(
-        args.width, args.height, size_x, size_y, input_image, _reverse
+        args.width, args.height, size_x, size_y, input_image, _reverse, quad_points
     )
 
     # convert to RBG if necessary
@@ -190,135 +186,50 @@ def main():
 # Image I/O Functions (using PIL)
 
 
-def transform_image(width, height, size_x, size_y, input_image, reverse_func):
-    # Create a new output image with alpha channel
-    output_image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    output_pixels = output_image.load()
-    input_pixels = input_image.load()
-
-    # Create a 64x64 grid of precalculated source coordinates
+def transform_image(width, height, size_x, size_y, input_image, reverse_func, quad_points):
+    # Build a 64x64 grid of precalculated source coordinates
     grid_size = 64
     grid = [[None for _ in range(grid_size + 1)] for _ in range(grid_size + 1)]
 
-    # Calculate source coordinates for grid points
     for grid_y in range(grid_size + 1):
         for grid_x in range(grid_size + 1):
-            # Calculate pixel coordinates in destination image
             x_pix = int(grid_x * (width - 1) / grid_size)
             y_pix = int(grid_y * (height - 1) / grid_size)
-
-            # Calculate the source coordinates from destination coordinates
             src_x, src_y = reverse_func(x_pix, y_pix)
-
-            # Scale to input image dimensions
             grid[grid_y][grid_x] = (src_x * size_x, src_y * size_y)
 
-    # For each pixel in the output image
-    for y_pix in range(height):
-        for x_pix in range(width):
-            # 2x2 sub-pixel coverage sampling for anti-aliased edges
-            samples_inside = 0
-            for sx, sy in [(-0.25, -0.25), (0.25, -0.25), (-0.25, 0.25), (0.25, 0.25)]:
-                if is_point_in_quad([x_pix + sx, y_pix + sy], width, height):
-                    samples_inside += 1
-            if samples_inside == 0:
-                output_pixels[x_pix, y_pix] = (0, 0, 0, 0)
-                continue
-            coverage = samples_inside / 4
+    # Build PIL mesh: each grid cell maps a destination rectangle to a source quad.
+    # PIL MESH source quad corner order: upper-left, lower-left, lower-right, upper-right.
+    mesh_data = []
+    for gy in range(grid_size):
+        for gx in range(grid_size):
+            x0 = gx * width // grid_size
+            y0 = gy * height // grid_size
+            x1 = (gx + 1) * width // grid_size
+            y1 = (gy + 1) * height // grid_size
+            ul = grid[gy][gx]
+            ll = grid[gy + 1][gx]
+            lr = grid[gy + 1][gx + 1]
+            ur = grid[gy][gx + 1]
+            mesh_data.append((
+                (x0, y0, x1, y1),
+                (ul[0], ul[1], ll[0], ll[1], lr[0], lr[1], ur[0], ur[1]),
+            ))
 
-            # Find grid cell containing this pixel
-            grid_x_float = x_pix * grid_size / (width - 1)
-            grid_y_float = y_pix * grid_size / (height - 1)
+    warped = input_image.transform(
+        (width, height), Image.Transform.MESH, mesh_data, Image.Resampling.BICUBIC
+    )
 
-            grid_x = int(grid_x_float)
-            grid_y = int(grid_y_float)
+    # Build an anti-aliased quad mask: draw at 4x resolution then Lanczos-downscale.
+    scale = 4
+    mask_big = Image.new("L", (width * scale, height * scale), 0)
+    ImageDraw.Draw(mask_big).polygon(
+        [(p[0] * scale, p[1] * scale) for p in quad_points], fill=255
+    )
+    mask = mask_big.resize((width, height), Image.Resampling.LANCZOS)
 
-            # Handle edge case at the far right/bottom
-            if grid_x >= grid_size:
-                grid_x = grid_size - 1
-            if grid_y >= grid_size:
-                grid_y = grid_size - 1
-
-            # Calculate fractional position within grid cell
-            dx = grid_x_float - grid_x
-            dy = grid_y_float - grid_y
-
-            # Get the four surrounding grid points
-            p00 = grid[grid_y][grid_x]
-            p10 = grid[grid_y][grid_x + 1] if grid_x < grid_size else p00
-            p01 = grid[grid_y + 1][grid_x] if grid_y < grid_size else p00
-            p11 = (
-                grid[grid_y + 1][grid_x + 1]
-                if grid_x < grid_size and grid_y < grid_size
-                else p10
-            )
-
-            # Bilinear interpolation of source coordinates
-            x = (
-                p00[0] * (1 - dx) * (1 - dy)
-                + p10[0] * dx * (1 - dy)
-                + p01[0] * (1 - dx) * dy
-                + p11[0] * dx * dy
-            )
-
-            y = (
-                p00[1] * (1 - dx) * (1 - dy)
-                + p10[1] * dx * (1 - dy)
-                + p01[1] * (1 - dx) * dy
-                + p11[1] * dx * dy
-            )
-
-            # If outside the source image boundaries, output transparent pixels
-            if x < 0 or x >= size_x or y < 0 or y >= size_y:
-                output_pixels[x_pix, y_pix] = (0, 0, 0, 0)
-            else:
-                # Bilinear interpolation for pixel values
-                x_floor = int(x)
-                y_floor = int(y)
-                x_ceil = min(x_floor + 1, size_x - 1)
-                y_ceil = min(y_floor + 1, size_y - 1)
-
-                dx_pixel = x - x_floor
-                dy_pixel = y - y_floor
-
-                # Get the four surrounding pixels from source image
-                p00_val = input_pixels[x_floor, y_floor]
-                p10_val = input_pixels[x_ceil, y_floor]
-                p01_val = input_pixels[x_floor, y_ceil]
-                p11_val = input_pixels[x_ceil, y_ceil]
-
-                # Interpolate each color channel including alpha
-                r = int(
-                    p00_val[0] * (1 - dx_pixel) * (1 - dy_pixel)
-                    + p10_val[0] * dx_pixel * (1 - dy_pixel)
-                    + p01_val[0] * (1 - dx_pixel) * dy_pixel
-                    + p11_val[0] * dx_pixel * dy_pixel
-                )
-
-                g = int(
-                    p00_val[1] * (1 - dx_pixel) * (1 - dy_pixel)
-                    + p10_val[1] * dx_pixel * (1 - dy_pixel)
-                    + p01_val[1] * (1 - dx_pixel) * dy_pixel
-                    + p11_val[1] * dx_pixel * dy_pixel
-                )
-
-                b = int(
-                    p00_val[2] * (1 - dx_pixel) * (1 - dy_pixel)
-                    + p10_val[2] * dx_pixel * (1 - dy_pixel)
-                    + p01_val[2] * (1 - dx_pixel) * dy_pixel
-                    + p11_val[2] * dx_pixel * dy_pixel
-                )
-
-                a = int(
-                    p00_val[3] * (1 - dx_pixel) * (1 - dy_pixel)
-                    + p10_val[3] * dx_pixel * (1 - dy_pixel)
-                    + p01_val[3] * (1 - dx_pixel) * dy_pixel
-                    + p11_val[3] * dx_pixel * dy_pixel
-                )
-
-                output_pixels[x_pix, y_pix] = (r, g, b, int(a * coverage))
-
-    return output_image
+    r, g, b, a = warped.split()
+    return Image.merge("RGBA", (r, g, b, ImageChops.multiply(a, mask)))
 
 
 # Geometric utility functions
@@ -370,34 +281,6 @@ def distance_2d(a, b):
 # Scale a 2D vector by a factor
 def scale_2d(vector, factor):
     return [vector[0] * factor, vector[1] * factor]
-
-
-# Check if a point is inside a quadrilateral
-def is_point_in_quad(point, width, height):
-    global quad_points
-
-    # Normalize the point and quadrilateral to 0-1 range
-    x, y = point[0] / width, point[1] / height
-
-    # Convert quad points to normalized space
-    norm_quad = [[p[0] / width, p[1] / height] for p in quad_points]
-
-    # Use the ray casting algorithm to determine if the point is inside the quad
-    inside = False
-    j = len(norm_quad) - 1
-
-    for i in range(len(norm_quad)):
-        if ((norm_quad[i][1] > y) != (norm_quad[j][1] > y)) and (
-            x
-            < (norm_quad[j][0] - norm_quad[i][0])
-            * (y - norm_quad[i][1])
-            / (norm_quad[j][1] - norm_quad[i][1])
-            + norm_quad[i][0]
-        ):
-            inside = not inside
-        j = i
-
-    return inside
 
 
 if __name__ == "__main__":
