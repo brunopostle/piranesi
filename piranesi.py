@@ -194,6 +194,7 @@ def transform_image(width, height, size_x, size_y, input_image, reverse_func):
     # Create a new output image with alpha channel
     output_image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     output_pixels = output_image.load()
+    input_pixels = input_image.load()
 
     # Create a 64x64 grid of precalculated source coordinates
     grid_size = 64
@@ -215,10 +216,15 @@ def transform_image(width, height, size_x, size_y, input_image, reverse_func):
     # For each pixel in the output image
     for y_pix in range(height):
         for x_pix in range(width):
-            # Check if the pixel is inside the quadrilateral
-            if not is_point_in_quad([x_pix, y_pix], width, height):
-                output_pixels[x_pix, y_pix] = (0, 0, 0, 0)  # Transparent
+            # 2x2 sub-pixel coverage sampling for anti-aliased edges
+            samples_inside = 0
+            for sx, sy in [(-0.25, -0.25), (0.25, -0.25), (-0.25, 0.25), (0.25, 0.25)]:
+                if is_point_in_quad([x_pix + sx, y_pix + sy], width, height):
+                    samples_inside += 1
+            if samples_inside == 0:
+                output_pixels[x_pix, y_pix] = (0, 0, 0, 0)
                 continue
+            coverage = samples_inside / 4
 
             # Find grid cell containing this pixel
             grid_x_float = x_pix * grid_size / (width - 1)
@@ -276,7 +282,6 @@ def transform_image(width, height, size_x, size_y, input_image, reverse_func):
                 dy_pixel = y - y_floor
 
                 # Get the four surrounding pixels from source image
-                input_pixels = input_image.load()
                 p00_val = input_pixels[x_floor, y_floor]
                 p10_val = input_pixels[x_ceil, y_floor]
                 p01_val = input_pixels[x_floor, y_ceil]
@@ -311,7 +316,7 @@ def transform_image(width, height, size_x, size_y, input_image, reverse_func):
                     + p11_val[3] * dx_pixel * dy_pixel
                 )
 
-                output_pixels[x_pix, y_pix] = (r, g, b, a)
+                output_pixels[x_pix, y_pix] = (r, g, b, int(a * coverage))
 
     return output_image
 
