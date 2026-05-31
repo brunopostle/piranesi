@@ -2,7 +2,7 @@
 """
 Piranesi GIMP 3.x plugin — interactive perspective transform.
 
-Found in GIMP under:  Filters ▸ Distorts ▸ Piranesi…
+Found in GIMP under:  Filters > Distorts > Piranesi…
 
 A floating dialog shows the layer with four draggable corner handles.
 Dragging a corner updates a coarse live preview in real time; releasing
