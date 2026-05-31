@@ -2,16 +2,21 @@
 """
 Piranesi GIMP 3.x plugin — interactive perspective transform.
 
-Canvas handles: four anchor points on a GIMP path, editable with the
-Paths tool directly on the canvas.  A small floating panel shows a
-preview thumbnail and Apply / Cancel buttons.
+Found in GIMP under:  Filters ▸ Distorts ▸ Piranesi…
+
+A floating dialog shows the layer with four draggable corner handles.
+Drag any corner to reshape the perspective quad; release to update the
+low-quality preview.  Click Apply to warp the layer into a new image.
 
 Install:
-  mkdir -p ~/.config/GIMP/3.0/plug-ins/piranesi_gimp
-  cp piranesi_gimp.py ~/.config/GIMP/3.0/plug-ins/piranesi_gimp/piranesi_gimp.py
-  chmod +x ~/.config/GIMP/3.0/plug-ins/piranesi_gimp/piranesi_gimp.py
+  mkdir -p ~/.config/GIMP/3.2/plug-ins/piranesi_gimp
+  cp piranesi_gimp.py ~/.config/GIMP/3.2/plug-ins/piranesi_gimp/piranesi_gimp.py
+  chmod +x ~/.config/GIMP/3.2/plug-ins/piranesi_gimp/piranesi_gimp.py
 
 Requires: Pillow  (pip install pillow)
+
+Copyright (C) 2025  Bruno Postle
+License: GNU General Public License v3 or later <https://www.gnu.org/licenses/gpl-3.0.html>
 """
 
 import math
@@ -26,8 +31,9 @@ gi.require_version("GimpUi",    "3.0")
 gi.require_version("Gtk",       "3.0")
 gi.require_version("Gdk",       "3.0")
 gi.require_version("GdkPixbuf", "2.0")
+gi.require_version("Gegl",      "0.4")
 
-from gi.repository import Gimp, GimpUi, GLib, GObject, Gtk, Gdk, GdkPixbuf, Gio
+from gi.repository import Gimp, GimpUi, GLib, GObject, Gtk, Gdk, GdkPixbuf, Gio, Gegl
 
 try:
     from PIL import Image as _PIL, ImageChops, ImageDraw
@@ -76,27 +82,64 @@ def _k_interp(k, t):
     return (k ** t - 1.0) / (k - 1.0)
 
 
+def _lines_parallel(l0, l1):
+    """True when two lines are effectively parallel.
+
+    Near-vertical lines get a slope of ±dy/1e-11 from _line(), so opposite-
+    direction verticals have slopes with opposite signs and a huge difference.
+    Catch that case by checking whether both slopes are simply very large.
+    """
+    a0, a1 = l0["a"], l1["a"]
+    if abs(a0) > 1e8 and abs(a1) > 1e8:   # both near-vertical
+        return True
+    return abs(a0 - a1) < 1e-4 * (1.0 + abs(a0) + abs(a1))
+
+
 def build_transforms(a, b, c, d, out_w, out_h):
     """Return *(forward, reverse)* for the Piranesi quad mapping.
 
     Points are pixel coords in the OUTPUT image:
       a = bottom-left  b = bottom-right  c = top-right  d = top-left
-    """
-    vp_cd = _intersect(_line(b, c), _line(d, a))
-    vp_da = _intersect(_line(a, b), _line(c, d))
 
-    eps  = 1e-10
-    k_ab = _dist(vp_da, b) / max(_dist(vp_da, a), eps)
-    k_bc = _dist(vp_cd, b) / max(_dist(vp_cd, c), eps)
-    k_cd = _dist(vp_da, c) / max(_dist(vp_da, d), eps)
-    k_da = _dist(vp_cd, a) / max(_dist(vp_cd, d), eps)
+    When opposite sides are parallel (rectangle / parallelogram) the
+    vanishing point is at infinity; detect this and use k=1 (linear
+    interpolation) so the identity case doesn't produce garbage.
+    """
+    eps = 1e-10
+
+    line_ab = _line(a, b)
+    line_cd = _line(c, d)
+    line_bc = _line(b, c)
+    line_da = _line(d, a)
+
+    if _lines_parallel(line_ab, line_cd):
+        k_ab = k_cd = 1.0
+    else:
+        vp_da = _intersect(line_ab, line_cd)
+        k_ab  = _dist(vp_da, b) / max(_dist(vp_da, a), eps)
+        k_cd  = _dist(vp_da, c) / max(_dist(vp_da, d), eps)
+
+    if _lines_parallel(line_bc, line_da):
+        k_bc = k_da = 1.0
+    else:
+        vp_cd = _intersect(line_bc, line_da)
+        k_bc  = _dist(vp_cd, b) / max(_dist(vp_cd, c), eps)
+        k_da  = _dist(vp_cd, a) / max(_dist(vp_cd, d), eps)
+
+    _bilinear = (k_ab == 1.0 and k_bc == 1.0 and k_cd == 1.0 and k_da == 1.0)
 
     def forward(x, y):
         px_ab = _add(a, _scale(_sub(b, a), _k_interp(k_ab, x)))
         px_cd = _add(d, _scale(_sub(c, d), _k_interp(k_cd, x)))
-        py_bc = _add(c, _scale(_sub(b, c), _k_interp(k_bc, y)))
-        py_da = _add(d, _scale(_sub(a, d), _k_interp(k_da, y)))
-        pt = _intersect(_line(px_ab, px_cd), _line(py_bc, py_da))
+        if _bilinear:
+            # Opposite sides parallel: use standard bilinear patch to avoid
+            # catastrophic cancellation from near-vertical connecting lines.
+            # y=0 is TOP (px_cd) and y=1 is BOTTOM (px_ab) in Piranesi coords.
+            pt = _add(px_cd, _scale(_sub(px_ab, px_cd), y))
+        else:
+            py_bc = _add(c, _scale(_sub(b, c), _k_interp(k_bc, y)))
+            py_da = _add(d, _scale(_sub(a, d), _k_interp(k_da, y)))
+            pt = _intersect(_line(px_ab, px_cd), _line(py_bc, py_da))
         return pt[0], pt[1]
 
     def reverse(px, py):
@@ -179,15 +222,20 @@ def pil_transform(src, out_w, out_h, points, grid_size=32):
 # ---------------------------------------------------------------------------
 
 def _drawable_to_pil(image, drawable):
-    """Export a GIMP drawable to a PIL Image via a temp PNG."""
+    """Export a GIMP drawable to a PIL Image via a GEGL-written temp PNG."""
     tmp = tempfile.mktemp(suffix=".png")
     try:
-        Gimp.file_overwrite(
-            Gimp.RunMode.NONINTERACTIVE,
-            image,
-            [drawable],
-            Gio.File.new_for_path(tmp),
-        )
+        Gegl.init(None)
+        buf = drawable.get_buffer()
+
+        graph = Gegl.Node.new()
+        src   = graph.create_child("gegl:buffer-source")
+        src.set_property("buffer", buf)
+        sink  = graph.create_child("gegl:png-save")
+        sink.set_property("path", tmp)
+        src.link(sink)
+        sink.process()
+
         img = _PIL.open(tmp)
         img.load()
         return img
@@ -201,84 +249,27 @@ def _pil_to_new_gimp_image(result_pil):
     tmp = tempfile.mktemp(suffix=".png")
     try:
         result_pil.save(tmp)
-        return Gimp.file_load(
-            Gimp.RunMode.NONINTERACTIVE,
-            Gio.File.new_for_path(tmp),
-        )
+        gfile = Gio.File.new_for_path(tmp)
+        # Try the GIMP 3 module-level load function first; fall back to PDB.
+        try:
+            return Gimp.file_load(Gimp.RunMode.NONINTERACTIVE, gfile)
+        except AttributeError:
+            pass
+        proc = Gimp.get_pdb().lookup_procedure("file-png-load")
+        if proc is None:
+            proc = Gimp.get_pdb().lookup_procedure("gimp-file-load")
+        config = proc.create_config()
+        config.set_property("run-mode", Gimp.RunMode.NONINTERACTIVE)
+        config.set_property("file", gfile)
+        return proc.run(config).index(1)
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
 
 
-# ---------------------------------------------------------------------------
-# GIMP canvas path (Vectors) helpers
-# ---------------------------------------------------------------------------
-
-_PATH_NAME = "Piranesi corners"
-
-
-def _create_corner_path(image, drawable):
-    """Create a closed quadrilateral path at the layer's bounding box.
-
-    Anchor order: BL → BR → TR → TL  (clockwise starting bottom-left).
-    Returns the new Gimp.Vectors object.
-    """
-    off_x, off_y = drawable.get_offsets()
-    w = drawable.get_width()
-    h = drawable.get_height()
-
-    # Image-space coordinates, Y-down convention (bottom = off_y + h)
-    corners_image = [
-        (off_x,     off_y + h),   # BL
-        (off_x + w, off_y + h),   # BR
-        (off_x + w, off_y),       # TR
-        (off_x,     off_y),       # TL
-    ]
-
-    vectors = Gimp.Vectors.new(image, _PATH_NAME)
-    image.insert_vectors(vectors, None, -1)
-    vectors.set_visible(True)
-
-    # Build bezier control-point list.  For a straight-edged quad every
-    # anchor's two handles sit exactly on the anchor itself (linear tangent).
-    # Format per anchor: [ctrl_before_x, ctrl_before_y,
-    #                      anchor_x,     anchor_y,
-    #                      ctrl_after_x, ctrl_after_y]
-    ctrl_pts = []
-    for px, py in corners_image:
-        ctrl_pts.extend([float(px), float(py),   # ctrl before
-                         float(px), float(py),   # anchor
-                         float(px), float(py)])  # ctrl after
-
-    vectors.bezier_stroke_new(ctrl_pts, len(ctrl_pts), True)  # closed=True
-    return vectors
-
-
-def _read_path_corners(vectors):
-    """Return [[BL], [BR], [TR], [TL]] as IMAGE-space [x, y] pairs.
-
-    Reads the first stroke of *vectors* and extracts the first four anchors.
-    Returns None if the path has fewer than four anchors.
-    """
-    stroke_ids = vectors.get_strokes()
-    if not stroke_ids:
-        return None
-
-    coords, _closed = vectors.stroke_get_points(stroke_ids[0])
-    # 6 floats per anchor (ctrl_before xy, anchor xy, ctrl_after xy)
-    n_anchors = len(coords) // 6
-    if n_anchors < 4:
-        return None
-
-    return [
-        [int(coords[i * 6 + 2]), int(coords[i * 6 + 3])]
-        for i in range(4)
-    ]
-
-
 def _image_to_layer_pts(image_pts, drawable):
     """Convert image-space corner points to layer-local coordinates."""
-    off_x, off_y = drawable.get_offsets()
+    _, off_x, off_y = drawable.get_offsets()
     return [[p[0] - off_x, p[1] - off_y] for p in image_pts]
 
 
@@ -286,7 +277,7 @@ def _image_to_layer_pts(image_pts, drawable):
 # Apply transform
 # ---------------------------------------------------------------------------
 
-_GRID_PREV  = 16
+_GRID_PREV  = 32
 _GRID_FINAL = 64
 
 
@@ -305,119 +296,184 @@ def _apply_transform(image, drawable, image_pts):
     Gimp.progress_update(0.85)
 
     new_image = _pil_to_new_gimp_image(result)
-    Gimp.display_new(new_image)
+    Gimp.Display.new(new_image)
     Gimp.displays_flush()
     Gimp.progress_update(1.0)
 
 
 # ---------------------------------------------------------------------------
-# Floating control panel
+# Floating control panel — self-contained GTK canvas with draggable handles
 # ---------------------------------------------------------------------------
 
-_PANEL_PREVIEW_MAX = 300   # thumbnail fits in this bounding box
+_HANDLE_R     = 8    # visual radius of corner handles (display px)
+_HANDLE_HIT_R = 16   # click/drag hit radius (display px)
+_PANEL_MAX    = 720  # maximum drawing-area dimension (display px)
 
 
 class _ControlPanel:
-    """Small floating window: preview thumbnail + Refresh / Apply / Cancel.
+    """Floating dialog with a Cairo canvas showing the layer and four
+    draggable corner handles.  No GIMP path tool required.
 
-    The plugin runs in a separate process from GIMP, so this window does NOT
-    block the GIMP canvas — the user can freely switch tools and drag path
-    anchors while this panel is open.
+    Corner order throughout: BL, BR, TR, TL (matches pil_transform).
+    Corners are stored in layer-local pixel coordinates.
     """
 
-    def __init__(self, image, drawable, vectors):
-        self.image    = image
-        self.drawable = drawable
-        self.vectors  = vectors
+    def __init__(self, image, drawable):
+        self._image    = image
+        self._drawable = drawable
+        _, self._off_x, self._off_y = drawable.get_offsets()
 
         self._src_pil = _drawable_to_pil(image, drawable)
         src_w, src_h  = self._src_pil.size
 
-        scale = min(_PANEL_PREVIEW_MAX / src_w,
-                    _PANEL_PREVIEW_MAX / src_h, 1.0)
-        self._pw        = max(1, int(src_w * scale))
-        self._ph        = max(1, int(src_h * scale))
-        self._src_scale = scale   # layer-px → preview-px
+        sc = min(_PANEL_MAX / src_w, _PANEL_MAX / src_h, 1.0)
+        self._scale  = sc
+        self._disp_w = max(1, int(src_w * sc))
+        self._disp_h = max(1, int(src_h * sc))
 
-    # ---------------------------------------------------------------- dialog
+        # Pre-scale source once for fast preview rendering
+        disp_src = self._src_pil.resize((self._disp_w, self._disp_h), _BILINEAR)
+        if disp_src.mode != "RGBA":
+            disp_src = disp_src.convert("RGBA")
+        self._disp_src = disp_src
+
+        # Initial corners: full layer bounding box, layer-local coords
+        w, h = float(src_w), float(src_h)
+        self._corners  = [[0.0, h], [w, h], [w, 0.0], [0.0, 0.0]]
+        self._drag_idx = None
+        self._pixbuf   = self._pil_to_pixbuf(self._disp_src)
+        self._refresh_preview()
+
+    # ---------------------------------------------------------------- helpers
+
+    def _pil_to_pixbuf(self, img):
+        if img.mode != "RGBA":
+            img = img.convert("RGBA")
+        data = img.tobytes()
+        return GdkPixbuf.Pixbuf.new_from_bytes(
+            GLib.Bytes.new(data),
+            GdkPixbuf.Colorspace.RGB, True, 8,
+            img.width, img.height, img.width * 4,
+        )
+
+    def _corners_disp(self):
+        sc = self._scale
+        return [[c[0] * sc, c[1] * sc] for c in self._corners]
+
+    def _refresh_preview(self):
+        sc  = self._scale
+        pts = [[c[0] * sc, c[1] * sc] for c in self._corners]
+        try:
+            result = pil_transform(
+                self._disp_src, self._disp_w, self._disp_h, pts, _GRID_PREV
+            )
+            self._pixbuf = self._pil_to_pixbuf(result)
+        except Exception as exc:
+            print(f"[piranesi] preview error: {exc}", file=sys.stderr)
+
+    def image_pts(self):
+        """Return corners as image-space [x, y] pairs for _apply_transform."""
+        return [
+            [c[0] + self._off_x, c[1] + self._off_y]
+            for c in self._corners
+        ]
+
+    # ------------------------------------------------------------ GTK events
+
+    def _on_draw(self, da, cr):
+        cr.set_source_rgb(0.25, 0.25, 0.25)
+        cr.paint()
+
+        if self._pixbuf:
+            Gdk.cairo_set_source_pixbuf(cr, self._pixbuf, 0, 0)
+            cr.paint()
+
+        # Quad outline
+        pts = self._corners_disp()
+        cr.move_to(*pts[0])
+        for p in pts[1:]:
+            cr.line_to(*p)
+        cr.close_path()
+        cr.set_source_rgba(1.0, 1.0, 0.2, 0.7)
+        cr.set_line_width(1.5)
+        cr.stroke()
+
+        # Corner handles
+        for i, (cx, cy) in enumerate(pts):
+            cr.arc(cx, cy, _HANDLE_R, 0, 2 * math.pi)
+            if i == self._drag_idx:
+                cr.set_source_rgba(1.0, 0.5, 0.0, 1.0)
+            else:
+                cr.set_source_rgba(1.0, 1.0, 0.2, 1.0)
+            cr.fill_preserve()
+            cr.set_source_rgb(0.0, 0.0, 0.0)
+            cr.set_line_width(1.5)
+            cr.stroke()
+
+    def _on_press(self, da, ev):
+        if ev.button != 1:
+            return
+        hit2 = _HANDLE_HIT_R ** 2
+        best, nearest = hit2, None
+        for i, (cx, cy) in enumerate(self._corners_disp()):
+            d2 = (ev.x - cx) ** 2 + (ev.y - cy) ** 2
+            if d2 < best:
+                best, nearest = d2, i
+        self._drag_idx = nearest
+        if nearest is not None:
+            da.queue_draw()
+
+    def _on_motion(self, da, ev):
+        if self._drag_idx is None:
+            return
+        sc = self._scale
+        self._corners[self._drag_idx] = [ev.x / sc, ev.y / sc]
+        da.queue_draw()
+
+    def _on_release(self, da, ev):
+        if self._drag_idx is not None:
+            self._drag_idx = None
+            self._refresh_preview()
+            da.queue_draw()
+
+    # ------------------------------------------------------------------- run
 
     def run(self):
-        """Show the panel; return True if Apply was clicked, False otherwise."""
-        dlg = Gtk.Dialog(title="Piranesi Perspective Transform")
-        dlg.set_keep_above(True)
-        dlg.set_resizable(False)
-        # Non-modal within the plugin process, but GIMP's UI is unaffected
-        # regardless because the plugin runs in its own process.
+        """Show the dialog; return True if Apply was clicked."""
+        dlg = Gtk.Dialog(title="Piranesi – Perspective Transform")
+        dlg.set_resizable(True)
+
+        da = Gtk.DrawingArea()
+        da.set_size_request(self._disp_w, self._disp_h)
+        da.add_events(
+            Gdk.EventMask.BUTTON_PRESS_MASK   |
+            Gdk.EventMask.BUTTON_RELEASE_MASK |
+            Gdk.EventMask.POINTER_MOTION_MASK
+        )
+        da.connect("draw",                 self._on_draw)
+        da.connect("button-press-event",   self._on_press)
+        da.connect("button-release-event", self._on_release)
+        da.connect("motion-notify-event",  self._on_motion)
+
+        vb = dlg.get_content_area()
+        vb.pack_start(da, True, True, 0)
+
+        lbl = Gtk.Label(
+            label="Drag the corner handles · release to update preview"
+        )
+        lbl.set_margin_top(4)
+        lbl.set_margin_bottom(4)
+        vb.pack_start(lbl, False, False, 0)
+
         dlg.add_button("_Cancel", Gtk.ResponseType.CANCEL)
         ok_btn = dlg.add_button("_Apply", Gtk.ResponseType.OK)
         ok_btn.get_style_context().add_class("suggested-action")
         dlg.set_default_response(Gtk.ResponseType.OK)
 
-        vb = dlg.get_content_area()
-        vb.set_border_width(10)
-        vb.set_spacing(8)
-
-        # Instructions
-        lbl = Gtk.Label()
-        lbl.set_markup(
-            "<b>Drag the path anchors on the GIMP canvas</b>\n"
-            "to reposition the four corner handles, then\n"
-            "click <i>Refresh Preview</i> or <i>Apply</i>.\n\n"
-            "Switch to the <b>Paths tool</b> (Shift+B) to edit."
-        )
-        lbl.set_xalign(0.0)
-        vb.pack_start(lbl, False, False, 0)
-
-        # Preview thumbnail
-        self._gtk_image = Gtk.Image()
-        self._gtk_image.set_size_request(self._pw, self._ph)
-        frame = Gtk.Frame()
-        frame.set_shadow_type(Gtk.ShadowType.IN)
-        frame.add(self._gtk_image)
-        vb.pack_start(frame, False, False, 0)
-
-        # Refresh button
-        refresh = Gtk.Button(label="_Refresh Preview")
-        refresh.set_use_underline(True)
-        refresh.connect("clicked", lambda _b: self._update_preview())
-        vb.pack_start(refresh, False, False, 0)
-
         dlg.show_all()
-        self._update_preview()          # initial thumbnail
-
         response = dlg.run()
         dlg.destroy()
         return response == Gtk.ResponseType.OK
-
-    # -------------------------------------------------------------- preview
-
-    def _update_preview(self):
-        image_pts = _read_path_corners(self.vectors)
-        if image_pts is None:
-            return
-
-        try:
-            layer_pts  = _image_to_layer_pts(image_pts, self.drawable)
-            scaled_pts = [[p[0] * self._src_scale,
-                           p[1] * self._src_scale] for p in layer_pts]
-            src_small  = self._src_pil.resize(
-                (self._pw, self._ph), _BILINEAR
-            )
-            result = pil_transform(
-                src_small, self._pw, self._ph, scaled_pts, _GRID_PREV
-            )
-
-            raw = result.tobytes()
-            pb  = GdkPixbuf.Pixbuf.new_from_bytes(
-                GLib.Bytes.new(raw),
-                GdkPixbuf.Colorspace.RGB,
-                True, 8,
-                self._pw, self._ph,
-                self._pw * 4,
-            )
-            self._gtk_image.set_from_pixbuf(pb)
-        except Exception as exc:
-            print(f"[piranesi] preview error: {exc}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +481,9 @@ class _ControlPanel:
 # ---------------------------------------------------------------------------
 
 class PiranesiPlugin(Gimp.PlugIn):
+
+    def do_set_i18n(self, name):
+        return False, None, None   # disable localisation
 
     def do_query_procedures(self):
         return ["plug-in-piranesi"]
@@ -441,9 +500,9 @@ class PiranesiPlugin(Gimp.PlugIn):
         proc.set_documentation(
             "Piranesi perspective transform",
             (
-                "Places four draggable path anchors at the layer corners. "
-                "Edit them with the Paths tool on the GIMP canvas, then "
-                "click Apply in the floating panel to run the transform."
+                "Opens a dialog showing the layer with four draggable corner "
+                "handles. Drag to reshape the perspective quad, then click "
+                "Apply to warp the layer into a new image."
             ),
             name,
         )
@@ -466,32 +525,13 @@ class PiranesiPlugin(Gimp.PlugIn):
 
         GimpUi.init("piranesi")
 
-        # 1. Create a path at the layer's bounding box corners
-        vectors = _create_corner_path(image, drawable)
-        image.set_active_vectors(vectors)
-        Gimp.displays_flush()
-
-        # 2. Switch to the Paths tool so anchors are immediately editable
-        try:
-            Gimp.context_set_tool("gimp-vector-tool")
-            Gimp.displays_flush()
-        except Exception:
-            pass   # non-fatal: user can switch manually
-
-        # 3. Show the floating control panel
-        panel  = _ControlPanel(image, drawable, vectors)
+        panel  = _ControlPanel(image, drawable)
         apply_ = panel.run()
 
-        # 4. Read final anchor positions and apply (or just clean up on cancel)
         if apply_:
-            image_pts = _read_path_corners(vectors)
-            if image_pts:
-                _apply_transform(image, drawable, image_pts)
+            _apply_transform(image, drawable, panel.image_pts())
 
-        # 5. Remove the helper path
-        image.remove_vectors(vectors)
         Gimp.displays_flush()
-
         return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())
 
 
