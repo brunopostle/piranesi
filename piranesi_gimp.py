@@ -25,27 +25,27 @@ import sys
 import tempfile
 
 import gi
+from gi.repository import Gimp, GimpUi, GLib, Gtk, Gdk, GdkPixbuf, Gio, Gegl
 
-gi.require_version("Gimp",       "3.0")
-gi.require_version("GimpUi",    "3.0")
-gi.require_version("Gtk",       "3.0")
-gi.require_version("Gdk",       "3.0")
+gi.require_version("Gimp", "3.0")
+gi.require_version("GimpUi", "3.0")
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
 gi.require_version("GdkPixbuf", "2.0")
-gi.require_version("Gegl",      "0.4")
+gi.require_version("Gegl", "0.4")
 
-from gi.repository import Gimp, GimpUi, GLib, GObject, Gtk, Gdk, GdkPixbuf, Gio, Gegl
 
 try:
     from PIL import Image as _PIL, ImageChops, ImageDraw
 
     _BILINEAR = getattr(_PIL.Resampling, "BILINEAR", _PIL.BILINEAR)
-    _LANCZOS  = getattr(_PIL.Resampling, "LANCZOS",  _PIL.LANCZOS)
-    _MESH     = getattr(_PIL.Transform,  "MESH",     _PIL.MESH)
+    _LANCZOS = getattr(_PIL.Resampling, "LANCZOS", _PIL.LANCZOS)
+    _MESH = getattr(_PIL.Transform, "MESH", _PIL.MESH)
 
-    _DEPS_OK  = True
+    _DEPS_OK = True
     _DEPS_ERR = ""
 except ImportError as _exc:
-    _DEPS_OK  = False
+    _DEPS_OK = False
     _DEPS_ERR = str(_exc)
 
 
@@ -53,15 +53,26 @@ except ImportError as _exc:
 # Vector / geometry helpers  (mirrors piranesi.py)
 # ---------------------------------------------------------------------------
 
-def _sub(a, b):   return [a[0] - b[0], a[1] - b[1]]
-def _add(a, b):   return [a[0] + b[0], a[1] + b[1]]
-def _scale(v, f): return [v[0] * f,    v[1] * f]
-def _dist(a, b):  return math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2)
+
+def _sub(a, b):
+    return [a[0] - b[0], a[1] - b[1]]
+
+
+def _add(a, b):
+    return [a[0] + b[0], a[1] + b[1]]
+
+
+def _scale(v, f):
+    return [v[0] * f, v[1] * f]
+
+
+def _dist(a, b):
+    return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2)
 
 
 def _line(p0, p1):
     dx = p1[0] - p0[0] or 1e-11
-    a  = (p1[1] - p0[1]) / dx
+    a = (p1[1] - p0[1]) / dx
     return {"a": a, "b": p0[1] - p0[0] * a}
 
 
@@ -76,10 +87,11 @@ def _intersect(l0, l1):
 # Piranesi transform core
 # ---------------------------------------------------------------------------
 
+
 def _k_interp(k, t):
     if abs(k - 1.0) < 1e-9:
         return t
-    return (k ** t - 1.0) / (k - 1.0)
+    return (k**t - 1.0) / (k - 1.0)
 
 
 def _lines_parallel(l0, l1):
@@ -90,7 +102,7 @@ def _lines_parallel(l0, l1):
     Catch that case by checking whether both slopes are simply very large.
     """
     a0, a1 = l0["a"], l1["a"]
-    if abs(a0) > 1e8 and abs(a1) > 1e8:   # both near-vertical
+    if abs(a0) > 1e8 and abs(a1) > 1e8:  # both near-vertical
         return True
     return abs(a0 - a1) < 1e-4 * (1.0 + abs(a0) + abs(a1))
 
@@ -116,17 +128,17 @@ def build_transforms(a, b, c, d, out_w, out_h):
         k_ab = k_cd = 1.0
     else:
         vp_da = _intersect(line_ab, line_cd)
-        k_ab  = _dist(vp_da, b) / max(_dist(vp_da, a), eps)
-        k_cd  = _dist(vp_da, c) / max(_dist(vp_da, d), eps)
+        k_ab = _dist(vp_da, b) / max(_dist(vp_da, a), eps)
+        k_cd = _dist(vp_da, c) / max(_dist(vp_da, d), eps)
 
     if _lines_parallel(line_bc, line_da):
         k_bc = k_da = 1.0
     else:
         vp_cd = _intersect(line_bc, line_da)
-        k_bc  = _dist(vp_cd, b) / max(_dist(vp_cd, c), eps)
-        k_da  = _dist(vp_cd, a) / max(_dist(vp_cd, d), eps)
+        k_bc = _dist(vp_cd, b) / max(_dist(vp_cd, c), eps)
+        k_da = _dist(vp_cd, a) / max(_dist(vp_cd, d), eps)
 
-    _bilinear = (k_ab == 1.0 and k_bc == 1.0 and k_cd == 1.0 and k_da == 1.0)
+    _bilinear = k_ab == 1.0 and k_bc == 1.0 and k_cd == 1.0 and k_da == 1.0
 
     def forward(x, y):
         px_ab = _add(a, _scale(_sub(b, a), _k_interp(k_ab, x)))
@@ -144,13 +156,13 @@ def build_transforms(a, b, c, d, out_w, out_h):
 
     def reverse(px, py):
         xn, yn = px / out_w, py / out_h
-        x,  y  = 0.5, 0.5
-        step   = 0.001
+        x, y = 0.5, 0.5
+        step = 0.001
         lx, ly = x, y
         for _ in range(11):
             fx0, fy0 = forward(x, y)
-            fx1, _   = forward(x + step, y)
-            _,   fy2 = forward(x, y + step)
+            fx1, _ = forward(x + step, y)
+            _, fy2 = forward(x, y + step)
             ddx = (fx1 - fx0) / out_w
             ddy = (fy2 - fy0) / out_h
             if abs(ddx) < 1e-10 or abs(ddy) < 1e-10:
@@ -168,6 +180,7 @@ def build_transforms(a, b, c, d, out_w, out_h):
 # ---------------------------------------------------------------------------
 # PIL-based image transform
 # ---------------------------------------------------------------------------
+
 
 def pil_transform(src, out_w, out_h, points, grid_size=32):
     """Warp *src* into the quad given by *points* [BL, BR, TR, TL].
@@ -197,20 +210,20 @@ def pil_transform(src, out_w, out_h, points, grid_size=32):
             y0 = gy * out_h // grid_size
             x1 = (gx + 1) * out_w // grid_size
             y1 = (gy + 1) * out_h // grid_size
-            ul, ll = grid[gy][gx],         grid[gy + 1][gx]
+            ul, ll = grid[gy][gx], grid[gy + 1][gx]
             lr, ur = grid[gy + 1][gx + 1], grid[gy][gx + 1]
-            mesh.append((
-                (x0, y0, x1, y1),
-                (ul[0], ul[1], ll[0], ll[1], lr[0], lr[1], ur[0], ur[1]),
-            ))
+            mesh.append(
+                (
+                    (x0, y0, x1, y1),
+                    (ul[0], ul[1], ll[0], ll[1], lr[0], lr[1], ur[0], ur[1]),
+                )
+            )
 
     warped = src.transform((out_w, out_h), _MESH, mesh, _BILINEAR)
 
-    sc       = 4
+    sc = 4
     mask_big = _PIL.new("L", (out_w * sc, out_h * sc), 0)
-    ImageDraw.Draw(mask_big).polygon(
-        [(p[0] * sc, p[1] * sc) for p in points], fill=255
-    )
+    ImageDraw.Draw(mask_big).polygon([(p[0] * sc, p[1] * sc) for p in points], fill=255)
     mask = mask_big.resize((out_w, out_h), _LANCZOS)
 
     r, g, b_ch, alpha = warped.split()
@@ -221,6 +234,7 @@ def pil_transform(src, out_w, out_h, points, grid_size=32):
 # GIMP 3 file I/O helpers
 # ---------------------------------------------------------------------------
 
+
 def _drawable_to_pil(image, drawable):
     """Export a GIMP drawable to a PIL Image via a GEGL-written temp PNG."""
     tmp = tempfile.mktemp(suffix=".png")
@@ -229,9 +243,9 @@ def _drawable_to_pil(image, drawable):
         buf = drawable.get_buffer()
 
         graph = Gegl.Node.new()
-        src   = graph.create_child("gegl:buffer-source")
+        src = graph.create_child("gegl:buffer-source")
         src.set_property("buffer", buf)
-        sink  = graph.create_child("gegl:png-save")
+        sink = graph.create_child("gegl:png-save")
         sink.set_property("path", tmp)
         src.link(sink)
         sink.process()
@@ -277,7 +291,7 @@ def _image_to_layer_pts(image_pts, drawable):
 # Apply transform
 # ---------------------------------------------------------------------------
 
-_GRID_PREV  = 32
+_GRID_PREV = 32
 _GRID_FINAL = 64
 
 
@@ -285,7 +299,7 @@ def _apply_transform(image, drawable, image_pts):
     """Run the full-resolution Piranesi transform and open the result."""
     Gimp.progress_init("Piranesi: computing transform…")
 
-    src      = _drawable_to_pil(image, drawable)
+    src = _drawable_to_pil(image, drawable)
     out_w, out_h = src.size
     Gimp.progress_update(0.15)
 
@@ -305,9 +319,9 @@ def _apply_transform(image, drawable, image_pts):
 # Floating control panel — self-contained GTK canvas with draggable handles
 # ---------------------------------------------------------------------------
 
-_HANDLE_R     = 8    # visual radius of corner handles (display px)
-_HANDLE_HIT_R = 16   # click/drag hit radius (display px)
-_PANEL_MAX    = 720  # maximum drawing-area dimension (display px)
+_HANDLE_R = 8  # visual radius of corner handles (display px)
+_HANDLE_HIT_R = 16  # click/drag hit radius (display px)
+_PANEL_MAX = 720  # maximum drawing-area dimension (display px)
 
 
 class _ControlPanel:
@@ -319,15 +333,15 @@ class _ControlPanel:
     """
 
     def __init__(self, image, drawable):
-        self._image    = image
+        self._image = image
         self._drawable = drawable
         _, self._off_x, self._off_y = drawable.get_offsets()
 
         self._src_pil = _drawable_to_pil(image, drawable)
-        src_w, src_h  = self._src_pil.size
+        src_w, src_h = self._src_pil.size
 
         sc = min(_PANEL_MAX / src_w, _PANEL_MAX / src_h, 1.0)
-        self._scale  = sc
+        self._scale = sc
         self._disp_w = max(1, int(src_w * sc))
         self._disp_h = max(1, int(src_h * sc))
 
@@ -339,9 +353,9 @@ class _ControlPanel:
 
         # Initial corners: full layer bounding box, layer-local coords
         w, h = float(src_w), float(src_h)
-        self._corners  = [[0.0, h], [w, h], [w, 0.0], [0.0, 0.0]]
+        self._corners = [[0.0, h], [w, h], [w, 0.0], [0.0, 0.0]]
         self._drag_idx = None
-        self._pixbuf   = self._pil_to_pixbuf(self._disp_src)
+        self._pixbuf = self._pil_to_pixbuf(self._disp_src)
         self._refresh_preview()
 
     # ---------------------------------------------------------------- helpers
@@ -352,8 +366,12 @@ class _ControlPanel:
         data = img.tobytes()
         return GdkPixbuf.Pixbuf.new_from_bytes(
             GLib.Bytes.new(data),
-            GdkPixbuf.Colorspace.RGB, True, 8,
-            img.width, img.height, img.width * 4,
+            GdkPixbuf.Colorspace.RGB,
+            True,
+            8,
+            img.width,
+            img.height,
+            img.width * 4,
         )
 
     def _corners_disp(self):
@@ -361,7 +379,7 @@ class _ControlPanel:
         return [[c[0] * sc, c[1] * sc] for c in self._corners]
 
     def _refresh_preview(self):
-        sc  = self._scale
+        sc = self._scale
         pts = [[c[0] * sc, c[1] * sc] for c in self._corners]
         try:
             result = pil_transform(
@@ -373,10 +391,7 @@ class _ControlPanel:
 
     def image_pts(self):
         """Return corners as image-space [x, y] pairs for _apply_transform."""
-        return [
-            [c[0] + self._off_x, c[1] + self._off_y]
-            for c in self._corners
-        ]
+        return [[c[0] + self._off_x, c[1] + self._off_y] for c in self._corners]
 
     # ------------------------------------------------------------ GTK events
 
@@ -413,7 +428,7 @@ class _ControlPanel:
     def _on_press(self, da, ev):
         if ev.button != 1:
             return
-        hit2 = _HANDLE_HIT_R ** 2
+        hit2 = _HANDLE_HIT_R**2
         best, nearest = hit2, None
         for i, (cx, cy) in enumerate(self._corners_disp()):
             d2 = (ev.x - cx) ** 2 + (ev.y - cy) ** 2
@@ -446,21 +461,19 @@ class _ControlPanel:
         da = Gtk.DrawingArea()
         da.set_size_request(self._disp_w, self._disp_h)
         da.add_events(
-            Gdk.EventMask.BUTTON_PRESS_MASK   |
-            Gdk.EventMask.BUTTON_RELEASE_MASK |
-            Gdk.EventMask.POINTER_MOTION_MASK
+            Gdk.EventMask.BUTTON_PRESS_MASK
+            | Gdk.EventMask.BUTTON_RELEASE_MASK
+            | Gdk.EventMask.POINTER_MOTION_MASK
         )
-        da.connect("draw",                 self._on_draw)
-        da.connect("button-press-event",   self._on_press)
+        da.connect("draw", self._on_draw)
+        da.connect("button-press-event", self._on_press)
         da.connect("button-release-event", self._on_release)
-        da.connect("motion-notify-event",  self._on_motion)
+        da.connect("motion-notify-event", self._on_motion)
 
         vb = dlg.get_content_area()
         vb.pack_start(da, True, True, 0)
 
-        lbl = Gtk.Label(
-            label="Drag the corner handles · release to update preview"
-        )
+        lbl = Gtk.Label(label="Drag the corner handles · release to update preview")
         lbl.set_margin_top(4)
         lbl.set_margin_bottom(4)
         vb.pack_start(lbl, False, False, 0)
@@ -480,19 +493,22 @@ class _ControlPanel:
 # GIMP 3 plugin class
 # ---------------------------------------------------------------------------
 
+
 class PiranesiPlugin(Gimp.PlugIn):
 
     def do_set_i18n(self, name):
-        return False, None, None   # disable localisation
+        return False, None, None  # disable localisation
 
     def do_query_procedures(self):
         return ["plug-in-piranesi"]
 
     def do_create_procedure(self, name):
         proc = Gimp.ImageProcedure.new(
-            self, name,
+            self,
+            name,
             Gimp.PDBProcType.PLUGIN,
-            self._run, None,
+            self._run,
+            None,
         )
         proc.set_image_types("RGB*, GRAY*")
         proc.set_menu_label("Piranesi…")
@@ -525,7 +541,7 @@ class PiranesiPlugin(Gimp.PlugIn):
 
         GimpUi.init("piranesi")
 
-        panel  = _ControlPanel(image, drawable)
+        panel = _ControlPanel(image, drawable)
         apply_ = panel.run()
 
         if apply_:
