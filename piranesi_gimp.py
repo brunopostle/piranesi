@@ -5,8 +5,9 @@ Piranesi GIMP 3.x plugin — interactive perspective transform.
 Found in GIMP under:  Filters ▸ Distorts ▸ Piranesi…
 
 A floating dialog shows the layer with four draggable corner handles.
-Drag any corner to reshape the perspective quad; release to update the
-low-quality preview.  Click Apply to warp the layer into a new image.
+Dragging a corner updates a coarse live preview in real time; releasing
+updates it at full preview quality.  Click Apply to warp the layer
+in-place (recorded as a single undo step).
 
 Install:
   mkdir -p ~/.config/GIMP/3.2/plug-ins/piranesi_gimp
@@ -25,7 +26,6 @@ import sys
 import tempfile
 
 import gi
-from gi.repository import Gimp, GimpUi, GLib, Gtk, Gdk, GdkPixbuf, Gio, Gegl
 
 gi.require_version("Gimp", "3.0")
 gi.require_version("GimpUi", "3.0")
@@ -33,6 +33,8 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 gi.require_version("GdkPixbuf", "2.0")
 gi.require_version("Gegl", "0.4")
+
+from gi.repository import Gimp, GimpUi, GLib, Gtk, Gdk, GdkPixbuf, Gio, Gegl
 
 
 try:
@@ -291,26 +293,42 @@ def _image_to_layer_pts(image_pts, drawable):
 # Apply transform
 # ---------------------------------------------------------------------------
 
+_GRID_LIVE = 16
 _GRID_PREV = 32
 _GRID_FINAL = 64
 
 
 def _apply_transform(image, drawable, image_pts):
-    """Run the full-resolution Piranesi transform and open the result."""
+    """Run the full-resolution Piranesi transform and replace the layer in-place."""
     Gimp.progress_init("Piranesi: computing transform…")
 
     src = _drawable_to_pil(image, drawable)
     out_w, out_h = src.size
     Gimp.progress_update(0.15)
 
-    # Convert image-space handles to layer-local pixel coords
     layer_pts = _image_to_layer_pts(image_pts, drawable)
 
     result = pil_transform(src, out_w, out_h, layer_pts, _GRID_FINAL)
     Gimp.progress_update(0.85)
 
-    new_image = _pil_to_new_gimp_image(result)
-    Gimp.Display.new(new_image)
+    tmp = tempfile.mktemp(suffix=".png")
+    try:
+        result.save(tmp)
+        gfile = Gio.File.new_for_path(tmp)
+        new_layer = Gimp.file_load_layer(Gimp.RunMode.NONINTERACTIVE, image, gfile)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+    _, off_x, off_y = drawable.get_offsets()
+    stack_pos = image.get_item_position(drawable)
+
+    image.undo_group_start()
+    image.insert_layer(new_layer, None, stack_pos)
+    new_layer.set_offsets(off_x, off_y)
+    image.remove_layer(drawable)
+    image.undo_group_end()
+
     Gimp.displays_flush()
     Gimp.progress_update(1.0)
 
@@ -356,7 +374,7 @@ class _ControlPanel:
         self._corners = [[0.0, h], [w, h], [w, 0.0], [0.0, 0.0]]
         self._drag_idx = None
         self._pixbuf = self._pil_to_pixbuf(self._disp_src)
-        self._refresh_preview()
+        self._refresh_preview(_GRID_PREV)
 
     # ---------------------------------------------------------------- helpers
 
@@ -378,12 +396,12 @@ class _ControlPanel:
         sc = self._scale
         return [[c[0] * sc, c[1] * sc] for c in self._corners]
 
-    def _refresh_preview(self):
+    def _refresh_preview(self, grid_size=_GRID_PREV):
         sc = self._scale
         pts = [[c[0] * sc, c[1] * sc] for c in self._corners]
         try:
             result = pil_transform(
-                self._disp_src, self._disp_w, self._disp_h, pts, _GRID_PREV
+                self._disp_src, self._disp_w, self._disp_h, pts, grid_size
             )
             self._pixbuf = self._pil_to_pixbuf(result)
         except Exception as exc:
@@ -443,12 +461,13 @@ class _ControlPanel:
             return
         sc = self._scale
         self._corners[self._drag_idx] = [ev.x / sc, ev.y / sc]
+        self._refresh_preview(_GRID_LIVE)
         da.queue_draw()
 
     def _on_release(self, da, ev):
         if self._drag_idx is not None:
             self._drag_idx = None
-            self._refresh_preview()
+            self._refresh_preview(_GRID_PREV)
             da.queue_draw()
 
     # ------------------------------------------------------------------- run
