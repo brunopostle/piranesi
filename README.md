@@ -112,6 +112,14 @@ rectilinear and Piranesi perspective and live canvas preview.
 
 See [inkscape/README.md](inkscape/README.md) for installation and usage.
 
+## GIMP PLUGIN
+
+A GIMP 3.x plugin is available in the `gimp/` directory. It provides an
+interactive dialog with draggable corner handles, a live preview, and a blend
+slider to mix between rectilinear and Piranesi perspective.
+
+See [gimp/README.md](gimp/README.md) for installation and usage.
+
 ## SEE ALSO
 
 For more information about Piranesi's perspective technique:
