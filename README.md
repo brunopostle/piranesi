@@ -104,6 +104,14 @@ For reverse mapping (to find source pixel coordinates from destination coordinat
 
 GNU General Public License version 3 or later.
 
+## INKSCAPE EXTENSION
+
+An Inkscape extension is available in the `inkscape/` directory. It applies
+the same transform to SVG vector paths, with a blend slider to mix between
+rectilinear and Piranesi perspective and live canvas preview.
+
+See [inkscape/README.md](inkscape/README.md) for installation and usage.
+
 ## SEE ALSO
 
 For more information about Piranesi's perspective technique:

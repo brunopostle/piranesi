@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<inkscape-extension xmlns="http://www.inkscape.org/namespace/inkscape/extension">
+  <name>Piranesi Transform</name>
+  <id>net.postle.piranesi</id>
+
+  <param name="blend" type="int" min="0" max="100" appearance="full"
+         gui-text="Perspective blend (0 = rectilinear, 100 = Piranesi):">100</param>
+
+  <effect needs-live-preview="true">
+    <object-type>path</object-type>
+    <effects-menu>
+      <submenu name="Transforms"/>
+    </effects-menu>
+  </effect>
+
+  <script>
+    <command location="inx" interpreter="python">piranesi_inkscape.py</command>
+  </script>
+
+</inkscape-extension>
