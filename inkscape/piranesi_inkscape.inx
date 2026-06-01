@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<inkscape-extension xmlns="http://www.inkscape.org/namespace/inkscape/extension">
+  <name>Piranesi Transform</name>
+  <id>net.postle.piranesi</id>
+
+  <param name="tab" type="notebook">
+
+    <page name="transform" gui-text="Transform">
+      <label appearance="header">Output quadrilateral (SVG user units, y increases downward)</label>
+      <label>Corner a — bottom-left (large y, small x):</label>
+      <param name="x1" type="float" precision="2" min="-99999" max="99999" gui-text="x1:">100</param>
+      <param name="y1" type="float" precision="2" min="-99999" max="99999" gui-text="y1:">500</param>
+      <separator/>
+      <label>Corner b — bottom-right (large y, large x):</label>
+      <param name="x2" type="float" precision="2" min="-99999" max="99999" gui-text="x2:">400</param>
+      <param name="y2" type="float" precision="2" min="-99999" max="99999" gui-text="y2:">500</param>
+      <separator/>
+      <label>Corner c — top-right (small y, large x):</label>
+      <param name="x3" type="float" precision="2" min="-99999" max="99999" gui-text="x3:">350</param>
+      <param name="y3" type="float" precision="2" min="-99999" max="99999" gui-text="y3:">100</param>
+      <separator/>
+      <label>Corner d — top-left (small y, small x):</label>
+      <param name="x4" type="float" precision="2" min="-99999" max="99999" gui-text="x4:">150</param>
+      <param name="y4" type="float" precision="2" min="-99999" max="99999" gui-text="y4:">100</param>
+    </page>
+
+    <page name="help" gui-text="About">
+      <label appearance="header">Piranesi's Perspective Transform</label>
+      <label xml:space="preserve">Applies Piranesi's non-linear perspective to the selected paths.
+
+Each path is normalised to its combined bounding box, then mapped
+to the specified output quadrilateral using exponential scaling
+based on the quad's vanishing points.
+
+Unlike a conventional projective (homography) transform, opposite
+sides of the quadrilateral remain visually parallel — the technique
+used by Piranesi and Canaletto in 18th-century veduta paintings.
+
+All element transforms are flattened before the warp is applied.
+For best results, ungroup elements and apply Object to Path first.
+
+https://github.com/brunopostle/piranesi</label>
+    </page>
+
+  </param>
+
+  <effect>
+    <object-type>path</object-type>
+    <effects-menu>
+      <submenu name="Transforms"/>
+    </effects-menu>
+  </effect>
+
+  <script>
+    <command location="inx" interpreter="python">piranesi_inkscape.py</command>
+  </script>
+
+</inkscape-extension>
