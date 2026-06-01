@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-Piranesi GIMP 3.x plugin — interactive perspective transform.
+Piranesi GIMP 3.x plugin - interactive perspective transform.
 
-Found in GIMP under:  Filters > Distorts > Piranesi…
+Found in GIMP under:  Filters > Distorts > Piranesi...
 
-A floating dialog shows the layer with four draggable corner handles.
-Dragging a corner updates a coarse live preview in real time; releasing
-updates it at full preview quality.  Click Apply to warp the layer
-in-place (recorded as a single undo step).
+A floating dialog shows the layer with four draggable corner handles.  Dragging
+a corner updates a coarse live preview in real time; releasing updates it at
+full preview quality.  Use the slider to adjust the amount of conventional
+affine (rectilnear) perspective vs. Piranesi perspective.  Click Apply to warp
+the layer in-place (recorded as a single undo step).
 
 Install:
   mkdir -p ~/.config/GIMP/3.2/plug-ins/piranesi_gimp
@@ -16,8 +17,25 @@ Install:
 
 Requires: Pillow  (pip install pillow)
 
-Copyright (C) 2025  Bruno Postle
-License: GNU General Public License v3 or later <https://www.gnu.org/licenses/gpl-3.0.html>
+This script performs Piranesi's perspective transformation of images using
+quadrilateral mapping. This mapping is not the same as conventional affine
+perspective transform. It reads an image from an input file and outputs a
+transformed image to an output file where the image is mapped to a quadrilateral
+defined by four points.
+
+https://medium.com/@brunopostle/piranesis-perspective-trick-6bcd7a754da9
+
+(C) 2026 Bruno Postle <bruno@postle.net>
+
+Piranesi is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+Piranesi is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
 """
 
 import math
@@ -106,19 +124,26 @@ def _compute_homography(a, b, c, d):
     ax, ay = a[0], a[1]
     bx, by = b[0], b[1]
 
-    A = cx - bx;  B = ax - bx;  C = bx - cx - ax + dx
-    D = cy - by;  E = ay - by;  F = by - cy - ay + dy
+    A = cx - bx
+    B = ax - bx
+    C = bx - cx - ax + dx
+    D = cy - by
+    E = ay - by
+    F = by - cy - ay + dy
 
     det = A * E - B * D
     if abs(det) < 1e-10:
-        g = h = 0.0          # degenerate / affine fallback
+        g = h = 0.0  # degenerate / affine fallback
     else:
         g = (C * E - B * F) / det
         h = (A * F - C * D) / det
 
-    Hc = dx;              Hf = dy
-    Ha = cx + g * cx - dx;  Hb = ax + h * ax - dx
-    Hd = cy + g * cy - dy;  He = ay + h * ay - dy
+    Hc = dx
+    Hf = dy
+    Ha = cx + g * cx - dx
+    Hb = ax + h * ax - dx
+    Hd = cy + g * cy - dy
+    He = ay + h * ay - dy
 
     return Ha, Hb, Hc, Hd, He, Hf, g, h
 
@@ -143,7 +168,7 @@ def _k_interp(k, t):
 def _lines_parallel(l0, l1):
     """True when two lines are effectively parallel.
 
-    Near-vertical lines get a slope of ±dy/1e-11 from _line(), so opposite-
+    Near-vertical lines get a slope of +-dy/1e-11 from _line(), so opposite-
     direction verticals have slopes with opposite signs and a huge difference.
     Catch that case by checking whether both slopes are simply very large.
     """
@@ -210,12 +235,17 @@ def build_transforms(a, b, c, d, out_w, out_h, blend=1.0):
     t = max(0.0, min(1.0, blend))
 
     if t >= 1.0 - 1e-9:
+
         def forward(x, y):
             return _piranesi_fwd(x, y)
+
     elif t <= 1e-9:
+
         def forward(x, y):
             return _homo_fwd(x, y, homo)
+
     else:
+
         def forward(x, y):
             px, py = _piranesi_fwd(x, y)
             hx, hy = _homo_fwd(x, y, homo)
@@ -361,12 +391,12 @@ def _image_to_layer_pts(image_pts, drawable):
 
 _GRID_LIVE = 16
 _GRID_PREV = 32
-_GRID_FINAL = 64
+_GRID_FINAL = 128
 
 
 def _apply_transform(image, drawable, image_pts, blend=1.0):
     """Run the full-resolution transform and replace the layer in-place."""
-    Gimp.progress_init("Piranesi: computing transform…")
+    Gimp.progress_init("Piranesi: computing transform...")
 
     src = _drawable_to_pil(image, drawable)
     out_w, out_h = src.size
@@ -400,7 +430,7 @@ def _apply_transform(image, drawable, image_pts, blend=1.0):
 
 
 # ---------------------------------------------------------------------------
-# Floating control panel — self-contained GTK canvas with draggable handles
+# Floating control panel - self-contained GTK canvas with draggable handles
 # ---------------------------------------------------------------------------
 
 _HANDLE_R = 8  # visual radius of corner handles (display px)
@@ -439,7 +469,7 @@ class _ControlPanel:
         w, h = float(src_w), float(src_h)
         self._corners = [[0.0, h], [w, h], [w, 0.0], [0.0, 0.0]]
         self._drag_idx = None
-        self._blend = 1.0          # default: full Piranesi
+        self._blend = 1.0  # default: full Piranesi
         self._blend_timer = None
         self._pixbuf = self._pil_to_pixbuf(self._disp_src)
         self._refresh_preview(_GRID_PREV)
@@ -469,7 +499,11 @@ class _ControlPanel:
         pts = [[c[0] * sc, c[1] * sc] for c in self._corners]
         try:
             result = pil_transform(
-                self._disp_src, self._disp_w, self._disp_h, pts, grid_size,
+                self._disp_src,
+                self._disp_w,
+                self._disp_h,
+                pts,
+                grid_size,
                 blend=self._blend,
             )
             self._pixbuf = self._pil_to_pixbuf(result)
@@ -544,9 +578,7 @@ class _ControlPanel:
         # Debounce: cancel pending timer and restart
         if self._blend_timer is not None:
             GLib.source_remove(self._blend_timer)
-        self._blend_timer = GLib.timeout_add(
-            80, self._blend_timeout, da
-        )
+        self._blend_timer = GLib.timeout_add(80, self._blend_timeout, da)
 
     def _blend_timeout(self, da):
         self._blend_timer = None
@@ -576,7 +608,7 @@ class _ControlPanel:
         vb = dlg.get_content_area()
         vb.pack_start(da, True, True, 0)
 
-        lbl = Gtk.Label(label="Drag the corner handles · release to update preview")
+        lbl = Gtk.Label(label="Drag the corner handles - release to update preview")
         lbl.set_margin_top(4)
         lbl.set_margin_bottom(2)
         vb.pack_start(lbl, False, False, 0)
@@ -591,8 +623,11 @@ class _ControlPanel:
         blend_box.pack_start(blend_lbl, False, False, 0)
 
         blend_adj = Gtk.Adjustment(
-            value=self._blend, lower=0.0, upper=1.0,
-            step_increment=0.01, page_increment=0.1,
+            value=self._blend,
+            lower=0.0,
+            upper=1.0,
+            step_increment=0.01,
+            page_increment=0.1,
         )
         slider = Gtk.Scale(
             orientation=Gtk.Orientation.HORIZONTAL,
@@ -641,23 +676,24 @@ class PiranesiPlugin(Gimp.PlugIn):
             None,
         )
         proc.set_image_types("RGB*, GRAY*")
-        proc.set_menu_label("Piranesi…")
+        proc.set_menu_label("Piranesi...")
         proc.add_menu_path("<Image>/Filters/Distorts")
         proc.set_documentation(
             "Piranesi perspective transform",
             (
                 "Opens a dialog showing the layer with four draggable corner "
-                "handles. Drag to reshape the perspective quad, then click "
-                "Apply to warp the layer into a new image."
+                "handles. Drag to reshape the perspective quad, mix conventional "
+                "rectilinear perspective with the slider, then click Apply to "
+                "warp the layer into a new image."
             ),
             name,
         )
-        proc.set_attribution("Bruno Postle", "Bruno Postle", "2025")
+        proc.set_attribution("Bruno Postle", "Bruno Postle", "2026")
         return proc
 
     def _run(self, procedure, run_mode, image, drawables, config, run_data):
         if not _DEPS_OK:
-            Gimp.message(f"Piranesi: missing dependency — {_DEPS_ERR}")
+            Gimp.message(f"Piranesi: missing dependency - {_DEPS_ERR}")
             return procedure.new_return_values(
                 Gimp.PDBStatusType.CALLING_ERROR, GLib.Error()
             )
