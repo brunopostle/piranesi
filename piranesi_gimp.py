@@ -86,6 +86,50 @@ def _intersect(l0, l1):
 
 
 # ---------------------------------------------------------------------------
+# Rectilinear (homography) transform
+# ---------------------------------------------------------------------------
+
+
+def _compute_homography(a, b, c, d):
+    """8-coefficient homography mapping normalised source [0,1]^2 to the quad.
+
+    Corner correspondence (matches build_transforms convention):
+      (0,0)->d  (1,0)->c  (0,1)->a  (1,1)->b
+         TL       TR       BL       BR
+
+    Returns (Ha,Hb,Hc, Hd,He,Hf, g,h) where:
+      X = (Ha*u + Hb*v + Hc) / (g*u + h*v + 1)
+      Y = (Hd*u + He*v + Hf) / (g*u + h*v + 1)
+    """
+    dx, dy = d[0], d[1]
+    cx, cy = c[0], c[1]
+    ax, ay = a[0], a[1]
+    bx, by = b[0], b[1]
+
+    A = cx - bx;  B = ax - bx;  C = bx - cx - ax + dx
+    D = cy - by;  E = ay - by;  F = by - cy - ay + dy
+
+    det = A * E - B * D
+    if abs(det) < 1e-10:
+        g = h = 0.0          # degenerate / affine fallback
+    else:
+        g = (C * E - B * F) / det
+        h = (A * F - C * D) / det
+
+    Hc = dx;              Hf = dy
+    Ha = cx + g * cx - dx;  Hb = ax + h * ax - dx
+    Hd = cy + g * cy - dy;  He = ay + h * ay - dy
+
+    return Ha, Hb, Hc, Hd, He, Hf, g, h
+
+
+def _homo_fwd(u, v, coeffs):
+    Ha, Hb, Hc, Hd, He, Hf, g, h = coeffs
+    w = g * u + h * v + 1.0
+    return (Ha * u + Hb * v + Hc) / w, (Hd * u + He * v + Hf) / w
+
+
+# ---------------------------------------------------------------------------
 # Piranesi transform core
 # ---------------------------------------------------------------------------
 
@@ -109,11 +153,16 @@ def _lines_parallel(l0, l1):
     return abs(a0 - a1) < 1e-4 * (1.0 + abs(a0) + abs(a1))
 
 
-def build_transforms(a, b, c, d, out_w, out_h):
-    """Return *(forward, reverse)* for the Piranesi quad mapping.
+def build_transforms(a, b, c, d, out_w, out_h, blend=1.0):
+    """Return *(forward, reverse)* for the blended quad mapping.
 
     Points are pixel coords in the OUTPUT image:
       a = bottom-left  b = bottom-right  c = top-right  d = top-left
+
+    blend=1.0  pure Piranesi logarithmic mapping
+    blend=0.0  pure rectilinear homography (standard perspective)
+    In between: linear interpolation of the two forward maps,
+    producing the mixed projection used in vedutismo paintings.
 
     When opposite sides are parallel (rectangle / parallelogram) the
     vanishing point is at infinity; detect this and use k=1 (linear
@@ -142,7 +191,7 @@ def build_transforms(a, b, c, d, out_w, out_h):
 
     _bilinear = k_ab == 1.0 and k_bc == 1.0 and k_cd == 1.0 and k_da == 1.0
 
-    def forward(x, y):
+    def _piranesi_fwd(x, y):
         px_ab = _add(a, _scale(_sub(b, a), _k_interp(k_ab, x)))
         px_cd = _add(d, _scale(_sub(c, d), _k_interp(k_cd, x)))
         if _bilinear:
@@ -155,6 +204,22 @@ def build_transforms(a, b, c, d, out_w, out_h):
             py_da = _add(d, _scale(_sub(a, d), _k_interp(k_da, y)))
             pt = _intersect(_line(px_ab, px_cd), _line(py_bc, py_da))
         return pt[0], pt[1]
+
+    # Blend the two forward maps; the numerical reverse works for any forward.
+    homo = _compute_homography(a, b, c, d)
+    t = max(0.0, min(1.0, blend))
+
+    if t >= 1.0 - 1e-9:
+        def forward(x, y):
+            return _piranesi_fwd(x, y)
+    elif t <= 1e-9:
+        def forward(x, y):
+            return _homo_fwd(x, y, homo)
+    else:
+        def forward(x, y):
+            px, py = _piranesi_fwd(x, y)
+            hx, hy = _homo_fwd(x, y, homo)
+            return (1 - t) * hx + t * px, (1 - t) * hy + t * py
 
     def reverse(px, py):
         xn, yn = px / out_w, py / out_h
@@ -184,14 +249,15 @@ def build_transforms(a, b, c, d, out_w, out_h):
 # ---------------------------------------------------------------------------
 
 
-def pil_transform(src, out_w, out_h, points, grid_size=32):
+def pil_transform(src, out_w, out_h, points, grid_size=32, blend=1.0):
     """Warp *src* into the quad given by *points* [BL, BR, TR, TL].
 
-    Returns an RGBA PIL Image of size out_w × out_h.
-    grid_size=16 → fast preview;  grid_size=64 → final quality.
+    Returns an RGBA PIL Image of size out_w x out_h.
+    grid_size=16 -> fast preview;  grid_size=64 -> final quality.
+    blend=1.0 -> Piranesi;  blend=0.0 -> rectilinear homography.
     """
     a, b, c, d = [list(map(float, p)) for p in points]
-    _, reverse = build_transforms(a, b, c, d, out_w, out_h)
+    _, reverse = build_transforms(a, b, c, d, out_w, out_h, blend=blend)
 
     if src.mode != "RGBA":
         src = src.convert("RGBA")
@@ -298,8 +364,8 @@ _GRID_PREV = 32
 _GRID_FINAL = 64
 
 
-def _apply_transform(image, drawable, image_pts):
-    """Run the full-resolution Piranesi transform and replace the layer in-place."""
+def _apply_transform(image, drawable, image_pts, blend=1.0):
+    """Run the full-resolution transform and replace the layer in-place."""
     Gimp.progress_init("Piranesi: computing transform…")
 
     src = _drawable_to_pil(image, drawable)
@@ -308,7 +374,7 @@ def _apply_transform(image, drawable, image_pts):
 
     layer_pts = _image_to_layer_pts(image_pts, drawable)
 
-    result = pil_transform(src, out_w, out_h, layer_pts, _GRID_FINAL)
+    result = pil_transform(src, out_w, out_h, layer_pts, _GRID_FINAL, blend=blend)
     Gimp.progress_update(0.85)
 
     tmp = tempfile.mktemp(suffix=".png")
@@ -373,6 +439,8 @@ class _ControlPanel:
         w, h = float(src_w), float(src_h)
         self._corners = [[0.0, h], [w, h], [w, 0.0], [0.0, 0.0]]
         self._drag_idx = None
+        self._blend = 1.0          # default: full Piranesi
+        self._blend_timer = None
         self._pixbuf = self._pil_to_pixbuf(self._disp_src)
         self._refresh_preview(_GRID_PREV)
 
@@ -401,7 +469,8 @@ class _ControlPanel:
         pts = [[c[0] * sc, c[1] * sc] for c in self._corners]
         try:
             result = pil_transform(
-                self._disp_src, self._disp_w, self._disp_h, pts, grid_size
+                self._disp_src, self._disp_w, self._disp_h, pts, grid_size,
+                blend=self._blend,
             )
             self._pixbuf = self._pil_to_pixbuf(result)
         except Exception as exc:
@@ -470,11 +539,26 @@ class _ControlPanel:
             self._refresh_preview(_GRID_PREV)
             da.queue_draw()
 
+    def _on_blend_changed(self, adj, da):
+        self._blend = adj.get_value()
+        # Debounce: cancel pending timer and restart
+        if self._blend_timer is not None:
+            GLib.source_remove(self._blend_timer)
+        self._blend_timer = GLib.timeout_add(
+            80, self._blend_timeout, da
+        )
+
+    def _blend_timeout(self, da):
+        self._blend_timer = None
+        self._refresh_preview(_GRID_PREV)
+        da.queue_draw()
+        return False
+
     # ------------------------------------------------------------------- run
 
     def run(self):
         """Show the dialog; return True if Apply was clicked."""
-        dlg = Gtk.Dialog(title="Piranesi – Perspective Transform")
+        dlg = Gtk.Dialog(title="Piranesi - Perspective Transform")
         dlg.set_resizable(True)
 
         da = Gtk.DrawingArea()
@@ -494,8 +578,35 @@ class _ControlPanel:
 
         lbl = Gtk.Label(label="Drag the corner handles · release to update preview")
         lbl.set_margin_top(4)
-        lbl.set_margin_bottom(4)
+        lbl.set_margin_bottom(2)
         vb.pack_start(lbl, False, False, 0)
+
+        # Blend slider
+        blend_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        blend_box.set_margin_start(8)
+        blend_box.set_margin_end(8)
+        blend_box.set_margin_bottom(4)
+
+        blend_lbl = Gtk.Label(label="Projection:")
+        blend_box.pack_start(blend_lbl, False, False, 0)
+
+        blend_adj = Gtk.Adjustment(
+            value=self._blend, lower=0.0, upper=1.0,
+            step_increment=0.01, page_increment=0.1,
+        )
+        slider = Gtk.Scale(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            adjustment=blend_adj,
+        )
+        slider.set_draw_value(False)
+        slider.set_hexpand(True)
+        slider.add_mark(0.0, Gtk.PositionType.BOTTOM, "Rectilinear")
+        slider.add_mark(0.5, Gtk.PositionType.BOTTOM, None)
+        slider.add_mark(1.0, Gtk.PositionType.BOTTOM, "Piranesi")
+        blend_adj.connect("value-changed", self._on_blend_changed, da)
+        blend_box.pack_start(slider, True, True, 0)
+
+        vb.pack_start(blend_box, False, False, 0)
 
         dlg.add_button("_Cancel", Gtk.ResponseType.CANCEL)
         ok_btn = dlg.add_button("_Apply", Gtk.ResponseType.OK)
@@ -564,7 +675,7 @@ class PiranesiPlugin(Gimp.PlugIn):
         apply_ = panel.run()
 
         if apply_:
-            _apply_transform(image, drawable, panel.image_pts())
+            _apply_transform(image, drawable, panel.image_pts(), blend=panel._blend)
 
         Gimp.displays_flush()
         return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())
