@@ -6,6 +6,12 @@ Maps selected paths from their combined bounding box to a user-defined
 quadrilateral using Piranesi's non-linear perspective (exponential scaling
 based on vanishing points).
 
+Preferred workflow: draw a 4-node closed polygon to define the output shape,
+select it together with the paths to transform, and run the extension.  The
+topmost object in z-order is used as the reference quad if it has exactly
+4 straight-line nodes; otherwise the corner coordinates from the dialog are
+used as a fallback.
+
 https://github.com/brunopostle/piranesi
 (C) 2025 Bruno Postle <bruno@postle.net>
 GPL-3.0-or-later
@@ -38,14 +44,43 @@ class PiranesiTransform(inkex.EffectExtension):
             inkex.errormsg("Please select at least one path element.")
             return
 
-        # Flatten each element's transform into its path data so we work in
-        # a consistent coordinate space.
+        # Flatten each element's own transform into its path data so all
+        # coordinates are in a consistent (parent) coordinate space.
         for el in selected:
             el.apply_transform()
 
-        # Combined bounding box of all selected paths (in parent coordinate space).
+        # Sort selected elements by document order so we can reliably identify
+        # the topmost one (last in document order = visually on top).
+        doc_order = list(self.svg.iter())
+        selected.sort(key=lambda el: doc_order.index(el))
+
+        # Check whether the topmost selected path is a 4-node closed polygon
+        # that should serve as the output-shape reference quad.
+        ref_quad = selected[-1]
+        quad_corners = _extract_quad_corners(ref_quad.path)
+
+        if quad_corners is not None and len(selected) > 1:
+            # Reference-quad mode: corners come from the drawn shape.
+            a, b, c, d = _assign_corners(quad_corners)
+            paths_to_transform = selected[:-1]
+        else:
+            # Fallback: use coordinates from the dialog.
+            if quad_corners is not None and len(selected) == 1:
+                inkex.errormsg(
+                    "The selected quad defines the output shape but there are "
+                    "no other paths to transform. Also select the paths you "
+                    "want to warp."
+                )
+                return
+            a = [self.options.x1, self.options.y1]
+            b = [self.options.x2, self.options.y2]
+            c = [self.options.x3, self.options.y3]
+            d = [self.options.x4, self.options.y4]
+            paths_to_transform = selected
+
+        # Combined bounding box of the paths being transformed.
         combined_bbox = None
-        for el in selected:
+        for el in paths_to_transform:
             bbox = el.path.bounding_box()
             if bbox is not None:
                 combined_bbox = bbox if combined_bbox is None else combined_bbox + bbox
@@ -59,21 +94,16 @@ class PiranesiTransform(inkex.EffectExtension):
         src_w = combined_bbox.width
         src_h = combined_bbox.height
 
-        # Output quadrilateral corners (in SVG user units, y increases downward).
-        # a = bottom-left (high y), b = bottom-right, c = top-right (low y), d = top-left.
-        a = [self.options.x1, self.options.y1]
-        b = [self.options.x2, self.options.y2]
-        c = [self.options.x3, self.options.y3]
-        d = [self.options.x4, self.options.y4]
-
-        # Vanishing points and k-ratios (same maths as piranesi.py).
+        # Build the forward transform from the four corners.
+        # a = bottom-left (large SVG y), b = bottom-right,
+        # c = top-right (small SVG y), d = top-left.
         line_ab = _points_2line(a, b)
         line_bc = _points_2line(b, c)
         line_cd = _points_2line(c, d)
         line_da = _points_2line(d, a)
 
-        vp_da = _line_intersection(line_ab, line_cd)  # horizontal vanishing point
-        vp_cd = _line_intersection(line_bc, line_da)  # vertical vanishing point
+        vp_da = _line_intersection(line_ab, line_cd)
+        vp_cd = _line_intersection(line_bc, line_da)
 
         k_ab = _distance_2d(vp_da, b) / _distance_2d(vp_da, a)
         k_bc = _distance_2d(vp_cd, b) / _distance_2d(vp_cd, c)
@@ -81,16 +111,15 @@ class PiranesiTransform(inkex.EffectExtension):
         k_da = _distance_2d(vp_cd, a) / _distance_2d(vp_cd, d)
 
         def forward(x_n, y_n):
-            """Map normalised (0–1, 0–1) coords to the output quadrilateral."""
             x_ab = _exp_scale(k_ab, x_n)
             x_cd = _exp_scale(k_cd, x_n)
             y_bc = _exp_scale(k_bc, y_n)
             y_da = _exp_scale(k_da, y_n)
 
-            p_ab = _add(_a(a), _scale(_sub(b, a), x_ab))
-            p_cd = _add(_a(d), _scale(_sub(c, d), x_cd))
-            p_bc = _add(_a(c), _scale(_sub(b, c), y_bc))
-            p_da = _add(_a(d), _scale(_sub(a, d), y_da))
+            p_ab = _add(_cp(a), _scale(_sub(b, a), x_ab))
+            p_cd = _add(_cp(d), _scale(_sub(c, d), x_cd))
+            p_bc = _add(_cp(c), _scale(_sub(b, c), y_bc))
+            p_da = _add(_cp(d), _scale(_sub(a, d), y_da))
 
             pt = _line_intersection(_points_2line(p_ab, p_cd), _points_2line(p_bc, p_da))
             return pt[0], pt[1]
@@ -100,8 +129,58 @@ class PiranesiTransform(inkex.EffectExtension):
             y_n = (y - src_y0) / src_h
             return forward(x_n, y_n)
 
-        for el in selected:
+        for el in paths_to_transform:
             el.path = _transform_path(el.path, transform_point)
+
+
+# ---------------------------------------------------------------------------
+# Reference-quad helpers
+# ---------------------------------------------------------------------------
+
+def _extract_quad_corners(path):
+    """Return 4 (x, y) tuples if path is a closed 4-node straight-line polygon, else None."""
+    abs_path = path.to_absolute()
+    points = []
+    closed = False
+
+    for cmd in abs_path:
+        name = type(cmd).__name__
+        if name == "Move":
+            if points:
+                return None  # multiple subpaths not supported
+            points.append((cmd.args[0], cmd.args[1]))
+        elif name == "Line":
+            points.append((cmd.args[0], cmd.args[1]))
+        elif name == "ZoneClose":
+            closed = True
+        else:
+            return None  # curves or arcs: not a simple polygon
+
+    if not closed:
+        return None
+
+    # Some tools emit an explicit closing L back to the first point before Z.
+    if (len(points) == 5
+            and abs(points[-1][0] - points[0][0]) < 1e-6
+            and abs(points[-1][1] - points[0][1]) < 1e-6):
+        points = points[:4]
+
+    return points if len(points) == 4 else None
+
+
+def _assign_corners(points):
+    """Sort 4 points into (a=bottom-left, b=bottom-right, c=top-right, d=top-left).
+
+    In SVG coordinates y increases downward, so bottom = larger y.
+    """
+    by_y = sorted(points, key=lambda p: p[1], reverse=True)
+    bottom = sorted(by_y[:2], key=lambda p: p[0])
+    top = sorted(by_y[2:], key=lambda p: p[0])
+    a = list(bottom[0])   # bottom-left
+    b = list(bottom[1])   # bottom-right
+    c = list(top[1])      # top-right
+    d = list(top[0])      # top-left
+    return a, b, c, d
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +191,7 @@ def _transform_path(path, transform_func):
     """Apply transform_func(x, y) -> (x', y') to every coordinate in a path."""
     abs_path = path.to_absolute()
     result = inkex.Path()
-    cur_x, cur_y = 0.0, 0.0  # tracks current pen position for H/V expansion
+    cur_x, cur_y = 0.0, 0.0
 
     for cmd in abs_path:
         name = type(cmd).__name__
@@ -126,13 +205,11 @@ def _transform_path(path, transform_func):
             cur_x, cur_y = cmd.args[0], cmd.args[1]
 
         elif name == "Horz":
-            # Expand H x → L x cur_y before transforming.
             x, y = transform_func(cmd.args[0], cur_y)
             result.append(Line(x, y))
             cur_x = cmd.args[0]
 
         elif name == "Vert":
-            # Expand V y → L cur_x y before transforming.
             x, y = transform_func(cur_x, cmd.args[0])
             result.append(Line(x, y))
             cur_y = cmd.args[0]
@@ -144,9 +221,6 @@ def _transform_path(path, transform_func):
             cur_x, cur_y = cmd.args[2], cmd.args[3]
 
         elif name == "Smooth":
-            # S has an explicit second control point; first is implied (mirror).
-            # We transform the explicit coords; smoothness is approximate after a
-            # non-linear warp.
             x2, y2 = transform_func(cmd.args[0], cmd.args[1])
             x, y = transform_func(cmd.args[2], cmd.args[3])
             result.append(Smooth(x2, y2, x, y))
@@ -160,11 +234,10 @@ def _transform_path(path, transform_func):
             cur_x, cur_y = cmd.args[4], cmd.args[5]
 
         elif name == "Arc":
-            # Arc radii and rotation are not transformed; only the endpoint moves.
-            # For large arcs under a non-linear warp this is an approximation.
             x, y = transform_func(cmd.args[5], cmd.args[6])
             result.append(
-                Arc(cmd.args[0], cmd.args[1], cmd.args[2], cmd.args[3], cmd.args[4], x, y)
+                Arc(cmd.args[0], cmd.args[1], cmd.args[2],
+                    cmd.args[3], cmd.args[4], x, y)
             )
             cur_x, cur_y = cmd.args[5], cmd.args[6]
 
@@ -179,7 +252,6 @@ def _transform_path(path, transform_func):
 # ---------------------------------------------------------------------------
 
 def _exp_scale(k, t):
-    """Exponential scaling along an edge with ratio k at normalised position t."""
     if abs(k - 1.0) < 1e-10:
         return t
     return ((k ** t) - 1) / (k - 1)
@@ -200,7 +272,7 @@ def _line_intersection(l0, l1):
     return [x, l0["a"] * x + l0["b"]]
 
 
-def _a(p):
+def _cp(p):
     return list(p)
 
 
