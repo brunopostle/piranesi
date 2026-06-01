@@ -72,6 +72,14 @@ class PiranesiTransform(inkex.EffectExtension):
                     "want to warp."
                 )
                 return
+            inkex.errormsg(
+                "No 4-node reference quad found in selection — using "
+                "coordinates from the dialog tab.\n\n"
+                "To position the output shape visually: draw a 4-node closed "
+                "polygon with the Pen or Rectangle tool, select it together "
+                "with your paths, and raise it to the top "
+                "(Object → Raise to Top)."
+            )
             a = [self.options.x1, self.options.y1]
             b = [self.options.x2, self.options.y2]
             c = [self.options.x3, self.options.y3]
