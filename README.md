@@ -1,6 +1,34 @@
 # PIRANESI'S PERSPECTIVE TRICK
 
-## NAME
+## INKSCAPE EXTENSION
+
+An Inkscape extension is available in the `inkscape/` directory. It applies
+the same transform to SVG vector paths, with a blend slider to mix between
+rectilinear and Piranesi perspective and live canvas preview.
+
+See [inkscape/README.md](inkscape/README.md) for installation and usage.
+
+## GIMP PLUGIN
+
+A GIMP 3.x plugin is available in the `gimp/` directory. It provides an
+interactive dialog with draggable corner handles, a live preview, and a blend
+slider to mix between rectilinear and Piranesi perspective.
+
+See [gimp/README.md](gimp/README.md) for installation and usage.
+
+## SEE ALSO
+
+For more information about Piranesi's perspective technique:
+
+https://github.com/brunopostle/piranesi/blob/main/doc/README.md
+
+Original link: https://medium.com/@brunopostle/piranesis-perspective-trick-6bcd7a754da9
+
+![Input image](main-street.webp)
+
+![Output image](main-street-piranesi.webp)
+
+## COMMAND-LINE TOOL
 
 piranesi.py - Transform images using Piranesi's perspective quadrilateral mapping
 
@@ -73,10 +101,6 @@ Change output dimensions:
 piranesi.py --width 2000 --height 2000 input.png output.png
 ```
 
-![Input image](main-street.webp)
-
-![Output image](main-street-piranesi.webp)
-
 ## ALGORITHM
 
 The transformation uses a non-linear quadrilateral mapping that:
@@ -104,26 +128,3 @@ For reverse mapping (to find source pixel coordinates from destination coordinat
 
 GNU General Public License version 3 or later.
 
-## INKSCAPE EXTENSION
-
-An Inkscape extension is available in the `inkscape/` directory. It applies
-the same transform to SVG vector paths, with a blend slider to mix between
-rectilinear and Piranesi perspective and live canvas preview.
-
-See [inkscape/README.md](inkscape/README.md) for installation and usage.
-
-## GIMP PLUGIN
-
-A GIMP 3.x plugin is available in the `gimp/` directory. It provides an
-interactive dialog with draggable corner handles, a live preview, and a blend
-slider to mix between rectilinear and Piranesi perspective.
-
-See [gimp/README.md](gimp/README.md) for installation and usage.
-
-## SEE ALSO
-
-For more information about Piranesi's perspective technique:
-
-https://github.com/brunopostle/piranesi/blob/main/doc/README.md
-
-Original link: https://medium.com/@brunopostle/piranesis-perspective-trick-6bcd7a754da9
