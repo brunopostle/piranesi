@@ -10,11 +10,23 @@ and the full Piranesi transform (100).
 
 ## Installation
 
+### Linux / macOS
+
 Copy both files to your Inkscape user extensions directory:
 
 ```
 cp piranesi_inkscape.py piranesi_inkscape.inx ~/.config/inkscape/extensions/
 ```
+
+### Windows
+
+Copy both files to your Inkscape user extensions directory:
+
+```
+copy piranesi_inkscape.py piranesi_inkscape.inx "%APPDATA%\inkscape\extensions\"
+```
+
+Or open `%APPDATA%\inkscape\extensions\` in Explorer and drag the files in.
 
 Then restart Inkscape. The extension appears under **Extensions → Transforms →
 Piranesi Transform**.
