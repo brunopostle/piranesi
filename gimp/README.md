@@ -9,15 +9,25 @@ Found in GIMP under **Filters → Distorts → Piranesi…**
 
 ## Requirements
 
-- GIMP 3.x
-- Pillow (`pip install pillow`)
+- GIMP 3.x (numpy is bundled with GIMP's Python environment)
 
 ## Installation
+
+**Linux / macOS**
 
 ```
 mkdir -p ~/.config/GIMP/3.2/plug-ins/piranesi_gimp
 cp gimp/piranesi_gimp.py ~/.config/GIMP/3.2/plug-ins/piranesi_gimp/piranesi_gimp.py
 chmod +x ~/.config/GIMP/3.2/plug-ins/piranesi_gimp/piranesi_gimp.py
+```
+
+**Windows**
+
+Create the folder `%APPDATA%\GIMP\3.2\plug-ins\piranesi_gimp` and copy
+`piranesi_gimp.py` into it, so the path is:
+
+```
+%APPDATA%\GIMP\3.2\plug-ins\piranesi_gimp\piranesi_gimp.py
 ```
 
 Then restart GIMP.
